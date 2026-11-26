@@ -126,16 +126,19 @@ fn RunUpdate<R:Runtime>(
 		io::Read,
 		os::windows::process::CommandExt,
 		path::{Path, PathBuf},
-		process::Command,
+		process::{Command, Stdio},
 	};
 
 	const CREATE_NO_WINDOW:u32 = 0x0800_0000;
 
-	const DETACHED_PROCESS:u32 = 0x0000_0008;
+	// Must NOT be combined with `DETACHED_PROCESS` (0x8): Windows treats
+	// `CREATE_NO_WINDOW | DETACHED_PROCESS` as mutually exclusive, causing
+	// `powershell.exe` to terminate immediately before executing `apply.ps1`.
+	const CREATE_NEW_PROCESS_GROUP:u32 = 0x0000_0200;
 
-	let CurrentExe = env::current_exe().map_err(|Error| format!("无法定位当前程序路径: {Error}"))?;
+	let CurrentExe = StripVerbatim(env::current_exe().map_err(|Error| format!("无法定位当前程序路径: {Error}"))?);
 
-	let UpdateDir = crate::Settings::Store::Dir().join("data").join("update");
+	let UpdateDir = StripVerbatim(crate::Settings::Store::Dir().join("data").join("update"));
 
 	let _ = fs::remove_dir_all(&UpdateDir);
 
@@ -214,22 +217,44 @@ fn RunUpdate<R:Runtime>(
 
 	let ScriptPath = UpdateDir.join("apply.ps1");
 
-	let ScriptBody =
-		"\u{FEFF}$ErrorActionPreference = 'Stop'\r\n$pidToWait = [int]$env:RADIUS_PID\r\n$targetExe = \
-		 $env:RADIUS_TARGET\r\n$stagedExe = $env:RADIUS_STAGED\r\n$updateDir = $env:RADIUS_UPDATE_DIR\r\n$workDir = \
-		 Split-Path -Parent $targetExe\r\n$backupExe = \"$targetExe.bak\"\r\nfor ($i = 0; $i -lt 80; $i++) {\r\n\tif \
-		 (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }\r\n\tStart-Sleep -Milliseconds \
-		 250\r\n}\r\n$swapped = $false\r\nfor ($i = 0; $i -lt 24; $i++) {\r\n\ttry {\r\n\t\tif (Test-Path \
-		 -LiteralPath $backupExe) {\r\n\t\t\tRemove-Item -LiteralPath $backupExe -Force -ErrorAction \
-		 SilentlyContinue\r\n\t\t}\r\n\t\tif (Test-Path -LiteralPath $targetExe) {\r\n\t\t\tMove-Item -LiteralPath \
-		 $targetExe -Destination $backupExe -Force\r\n\t\t}\r\n\t\tMove-Item -LiteralPath $stagedExe -Destination \
-		 $targetExe -Force\r\n\t\tRemove-Item -LiteralPath $backupExe -Force -ErrorAction \
-		 SilentlyContinue\r\n\t\t$swapped = $true\r\n\t\tbreak\r\n\t} catch {\r\n\t\tif (-not (Test-Path -LiteralPath \
-		 $targetExe) -and (Test-Path -LiteralPath $backupExe)) {\r\n\t\t\tMove-Item -LiteralPath $backupExe \
-		 -Destination $targetExe -Force -ErrorAction SilentlyContinue\r\n\t\t}\r\n\t\tStart-Sleep -Milliseconds \
-		 250\r\n\t}\r\n}\r\nif ($swapped) {\r\n\tStart-Process -FilePath $targetExe -WorkingDirectory \
-		 $workDir\r\n\tStart-Sleep -Milliseconds 500\r\n\tRemove-Item -LiteralPath $updateDir -Recurse -Force \
-		 -ErrorAction SilentlyContinue\r\n}\r\n";
+	let ScriptTemplate = r#"$ErrorActionPreference = 'Stop'
+$pidToWait = [int]$env:RADIUS_PID
+$targetExe = $env:RADIUS_TARGET
+$stagedExe = $env:RADIUS_STAGED
+$workDir = Split-Path -Parent $targetExe
+$backupExe = "$targetExe.bak"
+
+for ($i = 0; $i -lt 120; $i++) {
+	if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }
+	Start-Sleep -Milliseconds 200
+}
+
+for ($i = 0; $i -lt 30; $i++) {
+	try {
+		if (Test-Path -LiteralPath $backupExe) {
+			Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
+		}
+		if (Test-Path -LiteralPath $targetExe) {
+			Move-Item -LiteralPath $targetExe -Destination $backupExe -Force
+		}
+		Move-Item -LiteralPath $stagedExe -Destination $targetExe -Force
+		Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
+		break
+	} catch {
+		if (-not (Test-Path -LiteralPath $targetExe) -and (Test-Path -LiteralPath $backupExe)) {
+			Move-Item -LiteralPath $backupExe -Destination $targetExe -Force -ErrorAction SilentlyContinue
+		}
+		Start-Sleep -Milliseconds 250
+	}
+}
+
+if (Test-Path -LiteralPath $targetExe) {
+	Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue
+	Start-Process -FilePath $targetExe -WorkingDirectory $workDir
+}
+"#;
+
+	let ScriptBody = format!("\u{FEFF}{ScriptTemplate}");
 
 	fs::write(&ScriptPath, ScriptBody.as_bytes()).map_err(|Error| format!("无法生成安装脚本: {Error}"))?;
 
@@ -249,15 +274,25 @@ fn RunUpdate<R:Runtime>(
 		.arg(&ScriptPath)
 		.env("RADIUS_PID", std::process::id().to_string())
 		.env("RADIUS_TARGET", &CurrentExe)
-		.env("RADIUS_STAGED", &StagedExe)
-		.env("RADIUS_UPDATE_DIR", &UpdateDir)
-		.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+		.env("RADIUS_STAGED", StripVerbatim(StagedExe))
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
 		.spawn()
 		.map_err(|Error| format!("无法启动更新安装程序: {Error}"))?;
 
 	App.exit(0);
 
 	Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn StripVerbatim(Path:std::path::PathBuf) -> std::path::PathBuf {
+	Path.to_str()
+		.and_then(|Text| Text.strip_prefix(r"\\?\"))
+		.map(std::path::PathBuf::from)
+		.unwrap_or(Path)
 }
 
 #[cfg(target_os = "windows")]

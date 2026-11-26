@@ -4,6 +4,14 @@
 
 ---
 
+## 1.1.1
+
+### 修复
+
+- **修复应用内自动更新只退出不重启的 Bug**：移除互斥的 Win32 进程创建标志组合 `CREATE_NO_WINDOW | DETACHED_PROCESS`（该组合会导致隐藏启动的 PowerShell 替换脚本在执行前直接退出），改用 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` 并分离标准 IO 句柄；同时去除路径 `\\?\` 前缀、解除下载文件锁定（`Unblock-File`）并在替换失败时兜底拉起原程序，确保自动替换与重启稳定生效。
+
+---
+
 ## 1.1.0
 
 ### 优化与变更
