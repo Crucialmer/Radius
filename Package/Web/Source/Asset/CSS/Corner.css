@@ -26,6 +26,14 @@
 	right: 0;
 }
 
+/* On compact/small taskbars, keep bottom screen corners strictly within the taskbar height
+   so large corner radii never protrude above --WorkBottom into the maximized window. */
+.Window[data-max-corners="true"] .Corner[data-corner="BottomLeft"],
+.Window[data-max-corners="true"] .Corner[data-corner="BottomRight"] {
+	width: min(calc(var(--Corner, 15px) * 1.528665), var(--WorkBottom, 9999px));
+	height: min(calc(var(--Corner, 15px) * 1.528665), var(--WorkBottom, 9999px));
+}
+
 .Corner[data-corner="WorkBottomLeft"] {
 	transform: rotate(270deg) translateZ(0);
 	bottom: var(--WorkBottom, 0px);

@@ -4,6 +4,18 @@
 
 ---
 
+## 1.1.2
+
+### 修复
+
+- **修复小任务栏场景下最大化底部圆角错位、出现长条矩形的 Bug**：
+  - 将最大化窗口底部圆角锚点从仅依赖系统工作区 `MONITORINFO.rcWork` 改为实时跟踪顶层最大化窗口的实际 DWM 可视边界（`DWMWA_EXTENDED_FRAME_BOUNDS`），并结合实际任务栏边缘与实时 DPI 缩放校准；即使在注册表小任务栏、Windhawk / StartAllBack / ExplorerPatcher 紧凑任务栏或自动隐藏/悬浮任务栏导致 `rcWork` 未同步时，圆角也能精确贴合最大化窗口底边与小任务栏顶边。
+  - 优化任务栏可视区域检测（综合 `DWMWA_EXTENDED_FRAME_BOUNDS`、Windows 11 XAML `DesktopWindowContentBridge`、`rcWork` 与最大化窗口底边校准），消除小任务栏上方多余的裁切区域与描边矩形；非满宽悬浮任务栏不再错误隐藏屏幕底角。
+  - 限制开启最大化底部圆角时底部屏幕圆角不超出任务栏高度，避免大圆角半径在小任务栏上向上溢出。
+  - 新增覆盖层挂载完成握手同步（`overlay_ready`），防止启动瞬间丢失首帧工作区与最大化状态事件。
+
+---
+
 ## 1.1.1
 
 ### 修复

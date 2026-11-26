@@ -24,6 +24,7 @@ macro_rules! Commands {
 			$crate::Menu::Command::Update::CheckUpdate,
 			$crate::Menu::Command::Update::DownloadUpdate,
 			$crate::Menu::Command::Update::OpenRelease,
+			$crate::Menu::Command::Ready::Ready,
 			$crate::Menu::Command::Reset::Reset,
 			$crate::Menu::Command::Dismiss::Dismiss,
 			$crate::Menu::Command::Quit::Quit,

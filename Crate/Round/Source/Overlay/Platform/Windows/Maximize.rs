@@ -7,8 +7,16 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
 	Message::{Enum::Enum as Message, Payload::Struct as Payload},
+	Overlay::Platform::Taskbar,
 	Screen::Struct::Struct as Screen,
 };
+
+/// Per-monitor detection summary shared with [`Taskbar::Apply`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonitorReport {
+	pub Fullscreen:bool,
+	pub MaxBottom:Option<i32>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MonitorState {
@@ -16,9 +24,20 @@ struct MonitorState {
 	Left:i32,
 	Right:i32,
 	Bottom:i32,
+	ScaleMilli:i32,
 }
 
 static Cache:Mutex<Option<HashMap<String, MonitorState>>> = Mutex::new(None);
+
+/// Clear cached state for one monitor so the next refresh re-emits its
+/// live work-area insets and maximized state.
+pub fn Invalidate(Label:&str) {
+	let mut Guard = Cache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+
+	if let Some(Map) = Guard.as_mut() {
+		Map.remove(Label);
+	}
+}
 
 #[cfg(target_os = "windows")]
 const fn EncodeWide<const N: usize>(Bytes:&[u8; N]) -> [u16; N] {
@@ -43,24 +62,22 @@ const IgnoredClasses:&[&[u16]] = &[
 	&EncodeWide(b"Windows.UI.Core.CoreWindow"),
 ];
 
-/// Inspect top-level windows per monitor, notify each overlay when a maximized
-/// window appears/disappears or work-area insets change, and return the labels of
-/// monitors currently covered by a fullscreen window.
+/// Inspect top-level windows per monitor, anchor maximized bottom corners to
+/// the actual rendered bottom edge of the topmost maximized window (staying
+/// exact across standard, small, compact, floating, and auto-hidden taskbars),
+/// and return per-monitor fullscreen/bottom reports.
 #[cfg(target_os = "windows")]
 pub fn Refresh<R:Runtime>(
 	App:&AppHandle<R>,
 	Screens:&[Screen],
 	MaximizeEnabled:bool,
 	TrackFullscreen:bool,
-) -> Vec<String> {
+) -> HashMap<String, MonitorReport> {
 	use std::ffi::c_void;
 
 	use windows_sys::Win32::{
-		Foundation::{HWND, LPARAM, POINT, RECT},
-		Graphics::{
-			Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
-			Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
-		},
+		Foundation::{HWND, LPARAM, RECT},
+		Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
 		UI::WindowsAndMessaging::{
 			EnumWindows,
 			GWL_EXSTYLE,
@@ -71,13 +88,16 @@ pub fn Refresh<R:Runtime>(
 			IsIconic,
 			IsWindowVisible,
 			IsZoomed,
+			WS_EX_LAYERED,
 			WS_EX_TOOLWINDOW,
+			WS_EX_TRANSPARENT,
 		},
 	};
 
 	struct Candidate {
 		Rect:RECT,
 		Zoomed:bool,
+		FromDwm:bool,
 	}
 
 	struct EnumContext {
@@ -104,6 +124,12 @@ pub fn Refresh<R:Runtime>(
 			let ExStyle = GetWindowLongPtrW(Hwnd, GWL_EXSTYLE);
 
 			if (ExStyle & (WS_EX_TOOLWINDOW as isize)) != 0 {
+				return 1;
+			}
+
+			let ClickThrough = (WS_EX_TRANSPARENT | WS_EX_LAYERED) as isize;
+
+			if (ExStyle & ClickThrough) == ClickThrough {
 				return 1;
 			}
 
@@ -134,14 +160,14 @@ pub fn Refresh<R:Runtime>(
 
 			let mut Rect = RECT { left:0, top:0, right:0, bottom:0 };
 
-			if DwmGetWindowAttribute(
+			let FromDwm = DwmGetWindowAttribute(
 				Hwnd,
 				DWMWA_EXTENDED_FRAME_BOUNDS as u32,
 				&mut Rect as *mut RECT as *mut c_void,
 				std::mem::size_of::<RECT>() as u32,
-			) != 0
-				&& GetWindowRect(Hwnd, &mut Rect) == 0
-			{
+			) == 0;
+
+			if !FromDwm && GetWindowRect(Hwnd, &mut Rect) == 0 {
 				return 1;
 			}
 
@@ -149,7 +175,7 @@ pub fn Refresh<R:Runtime>(
 				return 1;
 			}
 
-			Ctx.List.push(Candidate { Rect, Zoomed:IsZoomed(Hwnd) != 0 });
+			Ctx.List.push(Candidate { Rect, Zoomed:IsZoomed(Hwnd) != 0, FromDwm });
 
 			1
 		}
@@ -175,53 +201,40 @@ pub fn Refresh<R:Runtime>(
 
 	let Map = Guard.get_or_insert_with(HashMap::new);
 
-	let mut Fullscreen = Vec::new();
+	let mut Reports = HashMap::with_capacity(Screens.len());
 
 	for Item in Screens {
-		let Center = POINT { x:Item.PhysicalX + Item.Pixels.0 / 2, y:Item.PhysicalY + Item.Pixels.1 / 2 };
+		let (MonRect, WorkRect) = Taskbar::MonitorRects(Item);
 
-		let (MonRect, WorkRect) = unsafe {
-			let Hmon = MonitorFromPoint(Center, MONITOR_DEFAULTTONEAREST);
+		let Scale = Taskbar::LiveScale(App, Item);
 
-			let mut Info:MONITORINFO = std::mem::zeroed();
+		let MonW = (MonRect.right - MonRect.left).max(1);
 
-			Info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+		let MonH = (MonRect.bottom - MonRect.top).max(1);
 
-			if !Hmon.is_null() && GetMonitorInfoW(Hmon, &mut Info) != 0 {
-				(Info.rcMonitor, Info.rcWork)
-			} else {
-				(
-					RECT {
-						left:Item.PhysicalX,
-						top:Item.PhysicalY,
-						right:Item.PhysicalX + Item.Pixels.0,
-						bottom:Item.PhysicalY + Item.Pixels.1,
-					},
-					RECT {
-						left:Item.PhysicalX,
-						top:Item.PhysicalY,
-						right:Item.PhysicalX + Item.Pixels.0,
-						bottom:Item.PhysicalY + Item.Pixels.1,
-					},
-				)
-			}
-		};
+		let WorkLeftPx = (WorkRect.left - MonRect.left).max(0);
 
-		let LeftPx = (WorkRect.left - MonRect.left).max(0);
+		let WorkRightPx = (MonRect.right - WorkRect.right).max(0);
 
-		let RightPx = (MonRect.right - WorkRect.right).max(0);
+		let WorkBottomPx = (MonRect.bottom - WorkRect.bottom).max(0);
 
-		let BottomPx = (MonRect.bottom - WorkRect.bottom).max(0);
+		let EdgeTaskbarBottomPx = Taskbar::BottomInsetOn(&MonRect, &WorkRect, Scale);
 
-		let WorkW = (WorkRect.right - WorkRect.left).max(1);
+		let mut LeftPx = WorkLeftPx;
 
-		let WorkH = (WorkRect.bottom - WorkRect.top).max(1);
+		let mut RightPx = WorkRightPx;
+
+		let mut BottomPx = if EdgeTaskbarBottomPx > 0 { EdgeTaskbarBottomPx } else { WorkBottomPx };
 
 		let mut HasMaximized = false;
 
 		let mut IsFullscreen = false;
 
+		let mut MaxBottom = None;
+
 		if NeedEnum {
+			let MaxBleed = (4.0 * Scale).round() as i32;
+
 			for Candidate in &Windows {
 				let IntersectW =
 					(Candidate.Rect.right.min(MonRect.right) - Candidate.Rect.left.max(MonRect.left)).max(0);
@@ -243,34 +256,68 @@ pub fn Refresh<R:Runtime>(
 				if CoversMonitor {
 					IsFullscreen = true;
 					HasMaximized = false;
+					MaxBottom = None;
 					break;
 				}
 
 				if MaximizeEnabled
-					&& BottomPx > 0
 					&& Candidate.Zoomed
-					&& IntersectW >= (WorkW * 9) / 10
-					&& IntersectH >= (WorkH * 9) / 10
+					&& IntersectW >= (MonW * 85) / 100
+					&& IntersectH >= (MonH * 70) / 100
 				{
-					HasMaximized = true;
+					if Candidate.FromDwm {
+						let WinLeft = (Candidate.Rect.left - MonRect.left).clamp(0, MonW);
+
+						let WinRight = (MonRect.right - Candidate.Rect.right).clamp(0, MonW);
+
+						let WinBottom = (MonRect.bottom - Candidate.Rect.bottom).clamp(0, MonH);
+
+						// Anchor to the maximized window's exact DWM bottom edge so stale
+						// default 48dp `rcWork` values never leave a rectangular strip above
+						// a small/compact taskbar. Only snap minor <=4dp overlaps when a
+						// docked bottom taskbar and `rcWork` both agree on its height.
+						let EffectiveBottom = if EdgeTaskbarBottomPx > WinBottom
+							&& EdgeTaskbarBottomPx - WinBottom <= MaxBleed
+							&& (WorkBottomPx - EdgeTaskbarBottomPx).abs() <= 2
+						{
+							EdgeTaskbarBottomPx
+						} else {
+							WinBottom
+						};
+
+						LeftPx = WinLeft;
+						RightPx = WinRight;
+						BottomPx = EffectiveBottom;
+						HasMaximized = EffectiveBottom > 2;
+						MaxBottom = HasMaximized.then_some(MonRect.bottom - EffectiveBottom);
+					} else {
+						HasMaximized = BottomPx > 2;
+						MaxBottom = HasMaximized.then_some(MonRect.bottom - BottomPx);
+					}
+
 					break;
 				}
 			}
 		}
 
-		if IsFullscreen {
-			Fullscreen.push(Item.Label.clone());
-		}
+		Reports.insert(Item.Label.clone(), MonitorReport { Fullscreen:IsFullscreen, MaxBottom });
 
-		let NextState = MonitorState { Maximized:HasMaximized, Left:LeftPx, Right:RightPx, Bottom:BottomPx };
+		let NextState = MonitorState {
+			Maximized:HasMaximized,
+			Left:LeftPx,
+			Right:RightPx,
+			Bottom:BottomPx,
+			ScaleMilli:(Scale * 1000.0).round() as i32,
+		};
 
 		let Previous = Map.get(&Item.Label).copied();
 
 		if Previous.is_none_or(|Prev| {
-			Prev.Left != NextState.Left || Prev.Right != NextState.Right || Prev.Bottom != NextState.Bottom
+			Prev.Left != NextState.Left
+				|| Prev.Right != NextState.Right
+				|| Prev.Bottom != NextState.Bottom
+				|| Prev.ScaleMilli != NextState.ScaleMilli
 		}) {
-			let Scale = Item.ScaleFactor.max(1.0);
-
 			let _ = App.emit_to(
 				Item.Label.as_str(),
 				"work_inset",
@@ -295,7 +342,7 @@ pub fn Refresh<R:Runtime>(
 		Map.insert(Item.Label.clone(), NextState);
 	}
 
-	Fullscreen
+	Reports
 }
 
 /// Non-Windows fallback.
@@ -305,6 +352,6 @@ pub fn Refresh<R:Runtime>(
 	_Screens:&[Screen],
 	_MaximizeEnabled:bool,
 	_TrackFullscreen:bool,
-) -> Vec<String> {
-	Vec::new()
+) -> HashMap<String, MonitorReport> {
+	HashMap::new()
 }

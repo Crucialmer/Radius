@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
@@ -91,14 +92,18 @@ function Overlay() {
 
 		const Unlisten: Array<() => void> = [];
 
+		const Ready: Array<Promise<void>> = [];
+
 		const Register = <T,>(Event: string, Handler: (Payload: T) => void) => {
-			void listen<T>(Event, ({ payload }) => Handler(payload), Target).then((Off) => {
-				if (Disposed) {
-					Off();
-				} else {
-					Unlisten.push(Off);
-				}
-			});
+			Ready.push(
+				listen<T>(Event, ({ payload }) => Handler(payload), Target).then((Off) => {
+					if (Disposed) {
+						Off();
+					} else {
+						Unlisten.push(Off);
+					}
+				}),
+			);
 		};
 
 		Register<ModeMessage>("mode", (payload) => setMode(payload.message.Mode));
@@ -113,6 +118,12 @@ function Overlay() {
 		Register<WorkInsetMessage>("work_inset", (payload) => setWorkInset(payload.message.WorkInset));
 		Register<TaskbarFrameMessage>("taskbar_frame", (payload) => setTaskbar(payload.message.TaskbarFrame));
 
+		void Promise.all(Ready).then(() => {
+			if (!Disposed) {
+				void invoke("overlay_ready");
+			}
+		});
+
 		onCleanup(() => {
 			Disposed = true;
 			Unlisten.forEach((Off) => Off());
@@ -124,6 +135,7 @@ function Overlay() {
 			class="Window"
 			data-label={Current.label}
 			data-mode={Mode()}
+			data-max-corners={ShowMaxCorners() ? "true" : "false"}
 			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}px; --WorkRight: ${WorkInset().Right}px; --WorkBottom: ${WorkInset().Bottom}px`}>
 			<Show when={ScreenVisible()}>
 				<For each={ActiveScreenCorners()}>{(corner) => <Corner id={corner} />}</For>

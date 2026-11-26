@@ -7,6 +7,7 @@ pub mod Hidden;
 pub mod Maximize;
 pub mod Mode;
 pub mod Quit;
+pub mod Ready;
 pub mod Reset;
 pub mod Size;
 pub mod State;

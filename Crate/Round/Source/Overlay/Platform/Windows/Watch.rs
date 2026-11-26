@@ -2,10 +2,13 @@
 //! Z-order bug), updates taskbar rounding + anti-aliased rims, and tracks maximized
 //! and fullscreen windows with minimal idle overhead.
 
-use std::sync::{
-	Mutex,
-	OnceLock,
-	atomic::{AtomicBool, AtomicU8, Ordering},
+use std::{
+	collections::HashMap,
+	sync::{
+		Mutex,
+		OnceLock,
+		atomic::{AtomicBool, AtomicU8, Ordering},
+	},
 };
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -23,7 +26,7 @@ use crate::{
 
 static LatestSettings:Mutex<Option<Settings>> = Mutex::new(None);
 
-static LastFullscreen:Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LastReports:Mutex<Option<HashMap<String, Maximize::MonitorReport>>> = Mutex::new(None);
 
 static SyncCallback:OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
@@ -43,6 +46,18 @@ pub fn Sync<R:Runtime>(App:&AppHandle<R>, Preferences:&Settings) {
 	*LatestSettings.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner()) = Some(Preferences.clone());
 
 	NeedsZOrder.store(true, Ordering::Release);
+	NeedsMaximize.store(true, Ordering::Release);
+	NeedsTaskbar.store(true, Ordering::Release);
+
+	RunOnce(App);
+}
+
+/// Re-emit current maximized/work-area/taskbar state for one overlay window
+/// after its webview finishes attaching event listeners.
+pub fn Resync<R:Runtime>(App:&AppHandle<R>, Label:&str) {
+	Maximize::Invalidate(Label);
+	Taskbar::InvalidateFrame(Label);
+
 	NeedsMaximize.store(true, Ordering::Release);
 	NeedsTaskbar.store(true, Ordering::Release);
 
@@ -88,29 +103,27 @@ fn RunOnce<R:Runtime>(App:&AppHandle<R>) {
 		EnsureOverlaysAboveTaskbar(App);
 	}
 
-	let Fullscreen = if NeedsMaximize.swap(false, Ordering::AcqRel) {
+	let Reports = if NeedsMaximize.swap(false, Ordering::AcqRel) {
 		let Next = Maximize::Refresh(App, &Screens, Preferences.MaximizeCorners, Preferences.TaskbarRounded);
 
-		let mut Guard = LastFullscreen.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+		let mut Guard = LastReports.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
 
-		if *Guard != Next {
+		if Guard.as_ref() != Some(&Next) {
 			NeedsTaskbar.store(true, Ordering::Release);
-			*Guard = Next.clone();
+			*Guard = Some(Next.clone());
 		}
 
 		Next
 	} else {
-		LastFullscreen.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner()).clone()
+		LastReports
+			.lock()
+			.unwrap_or_else(|Poisoned| Poisoned.into_inner())
+			.clone()
+			.unwrap_or_default()
 	};
 
 	if NeedsTaskbar.swap(false, Ordering::AcqRel) {
-		Taskbar::Apply(
-			App,
-			Preferences.TaskbarRounded,
-			Preferences.TaskbarRadius,
-			&Screens,
-			&Fullscreen,
-		);
+		Taskbar::Apply(App, Preferences.TaskbarRounded, Preferences.TaskbarRadius, &Screens, &Reports);
 	}
 }
 
