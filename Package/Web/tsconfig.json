@@ -1,0 +1,12 @@
+{
+	"compilerOptions": {
+		"baseUrl": "./",
+		"jsx": "preserve",
+		"jsxImportSource": "solid-js",
+		"lib": ["DOM", "DOM.Iterable", "ESNext"],
+		"outDir": "Target",
+		"rootDir": "./Source"
+	},
+	"extends": "@playform/build/tsconfig",
+	"include": ["Source"]
+}

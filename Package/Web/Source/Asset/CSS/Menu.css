@@ -1,0 +1,787 @@
+/*
+ * macOS 26 (Tahoe) Liquid Glass Control Panel
+ *
+ * Strict concentric geometry:
+ *   outer popover = 22px, inner padding = 10px -> grouped glass cards = 12px
+ *   controls & actions = capsule (9999px)
+ * Optical cues:
+ *   diagonal specular refraction rim, grouped glass wells, elastic thumb physics,
+ *   full dark/light parity (`color-scheme: light dark`), reduced motion & transparency.
+ */
+
+:root {
+	color-scheme: light dark;
+	--panel-margin: 10px;
+	--panel-radius: 22px;
+	--group-radius: 12px;
+	--field-radius: 9px;
+	--pill-radius: 9999px;
+	--accent: #007aff;
+	--accent-strong: #0066d6;
+	--accent-ring: rgba(0, 122, 255, 0.32);
+	--track: rgba(60, 60, 67, 0.14);
+	--text-primary: rgba(24, 24, 28, 0.94);
+	--text-secondary: rgba(60, 60, 67, 0.68);
+	--text-tertiary: rgba(60, 60, 67, 0.54);
+	--spring: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Segoe UI Variable Text", "Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+	font-size: 13px;
+	line-height: 1.4;
+	color: var(--text-primary);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	text-rendering: optimizeLegibility;
+	user-select: none;
+	overflow: hidden;
+}
+
+.Panel {
+	position: relative;
+	margin: var(--panel-margin);
+	padding: 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: linear-gradient(
+		160deg,
+		rgba(255, 255, 255, 0.90) 0%,
+		rgba(246, 248, 252, 0.85) 55%,
+		rgba(239, 242, 249, 0.88) 100%
+	);
+	color: var(--text-primary);
+	border-radius: var(--panel-radius);
+	box-shadow:
+		inset 0 1px 0.5px rgba(255, 255, 255, 0.95),
+		inset 0 -0.5px 0 rgba(15, 20, 35, 0.06),
+		0 0 0 0.5px rgba(15, 20, 35, 0.11),
+		0 8px 20px rgba(15, 20, 35, 0.14),
+		0 2px 5px rgba(15, 20, 35, 0.08);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+/* Signature macOS 26 diagonal specular refraction rim */
+.Panel::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	padding: 1px;
+	background: linear-gradient(
+		145deg,
+		rgba(255, 255, 255, 0.95) 0%,
+		rgba(255, 255, 255, 0.25) 38%,
+		rgba(255, 255, 255, 0.12) 65%,
+		rgba(255, 255, 255, 0.65) 100%
+	);
+	-webkit-mask:
+		linear-gradient(#fff 0 0) content-box,
+		linear-gradient(#fff 0 0);
+	-webkit-mask-composite: xor;
+	mask-composite: exclude;
+	pointer-events: none;
+}
+
+.Panel > * {
+	flex: 0 0 auto;
+}
+
+/* Concentric Liquid Glass grouped control card (12px + 10px padding = 22px outer) */
+.Group {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 9px 11px;
+	border-radius: var(--group-radius);
+	background: rgba(255, 255, 255, 0.56);
+	border: 0.5px solid rgba(15, 20, 35, 0.07);
+	box-shadow:
+		inset 0 0.5px 0 rgba(255, 255, 255, 0.85),
+		0 1px 2px rgba(15, 20, 35, 0.03);
+}
+
+.Title {
+	margin: 0;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--text-secondary);
+	display: flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.SectionIcon {
+	width: 13px;
+	height: 13px;
+	color: var(--accent);
+	opacity: 0.88;
+	flex-shrink: 0;
+}
+
+.Note {
+	margin: 0;
+	font-size: 11px;
+	line-height: 1.38;
+	color: var(--text-secondary);
+}
+
+.Where {
+	margin: 0;
+	font-size: 11px;
+	line-height: 1.35;
+	color: var(--text-secondary);
+	overflow-wrap: anywhere;
+}
+
+/* Custom macOS 26 Select Field */
+.PickerWrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.Picker {
+	width: 100%;
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 500;
+	padding: 6px 28px 6px 10px;
+	-webkit-appearance: none;
+	appearance: none;
+	border: 0.5px solid rgba(15, 20, 35, 0.12);
+	border-radius: var(--field-radius);
+	background: rgba(255, 255, 255, 0.78);
+	color: var(--text-primary);
+	outline: none;
+	cursor: pointer;
+	box-shadow:
+		inset 0 0.5px 0 rgba(255, 255, 255, 0.9),
+		0 1px 2px rgba(15, 20, 35, 0.05);
+	transition: background-color 0.18s var(--spring), border-color 0.18s var(--spring), box-shadow 0.18s var(--spring);
+}
+
+.Picker:hover {
+	background: rgba(255, 255, 255, 0.96);
+	border-color: rgba(15, 20, 35, 0.22);
+}
+
+.Picker:focus-visible {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.PickerChevron {
+	position: absolute;
+	right: 9px;
+	width: 12px;
+	height: 12px;
+	color: var(--text-secondary);
+	pointer-events: none;
+}
+
+.Row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 28px;
+}
+
+.Row > span:first-child {
+	flex: 0 0 74px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	font-size: 12.5px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+.Row .Name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.Row .Mark {
+	flex: 0 0 auto;
+	color: var(--accent);
+	font-size: 14px;
+	line-height: 1;
+}
+
+/* macOS 26 Liquid Glass Pill Slider */
+.Row input[type="range"] {
+	flex: 1;
+	min-width: 0;
+	-webkit-appearance: none;
+	appearance: none;
+	height: 5px;
+	border-radius: var(--pill-radius);
+	background: linear-gradient(
+		to right,
+		var(--accent) 0%,
+		var(--accent) var(--fill, 0%),
+		var(--track) var(--fill, 0%),
+		var(--track) 100%
+	);
+	outline: none;
+	cursor: pointer;
+}
+
+.Row input[type="range"]:focus-visible {
+	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.Row input[type="range"]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 22px;
+	height: 14px;
+	border-radius: var(--pill-radius);
+	background: linear-gradient(180deg, #ffffff 0%, #f3f5f9 100%);
+	border: 0.5px solid rgba(15, 20, 35, 0.14);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.95),
+		0 1.5px 4px rgba(15, 20, 35, 0.22),
+		0 0.5px 1px rgba(15, 20, 35, 0.12);
+	cursor: pointer;
+	transition: transform 0.16s var(--spring), background 0.16s var(--spring), box-shadow 0.16s var(--spring);
+}
+
+.Row input[type="range"]::-webkit-slider-thumb:hover {
+	transform: scale(1.06);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 1),
+		0 2.5px 7px rgba(15, 20, 35, 0.26);
+}
+
+/* Liquid Glass lensing expansion while dragging */
+.Row input[type="range"]:active::-webkit-slider-thumb {
+	transform: scale(1.14, 1.08);
+	background: rgba(255, 255, 255, 0.78);
+	border-color: rgba(255, 255, 255, 0.95);
+	box-shadow:
+		inset 0 1px 1px rgba(255, 255, 255, 0.98),
+		0 3px 10px rgba(0, 122, 255, 0.25);
+}
+
+.Number {
+	min-width: 34px;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--text-primary);
+	background: rgba(15, 20, 35, 0.055);
+	padding: 2px 6px;
+	border-radius: var(--pill-radius);
+}
+
+/* macOS 26 Capsule Segmented Control */
+.Segmented {
+	display: inline-flex;
+	padding: 2px;
+	background: rgba(15, 20, 35, 0.065);
+	border-radius: var(--pill-radius);
+	gap: 2px;
+	border: 0.5px solid rgba(15, 20, 35, 0.05);
+}
+
+.Segmented button {
+	font: inherit;
+	font-size: 12px;
+	font-weight: 500;
+	padding: 3px 13px;
+	border: none;
+	border-radius: var(--pill-radius);
+	background: transparent;
+	color: var(--text-secondary);
+	cursor: pointer;
+	outline: none;
+	transition: background-color 0.2s var(--spring), color 0.16s var(--spring), transform 0.14s var(--spring), box-shadow 0.2s var(--spring);
+}
+
+.Segmented button:hover {
+	color: var(--text-primary);
+}
+
+.Segmented button:active {
+	transform: scale(0.96);
+}
+
+.Segmented button:focus-visible {
+	box-shadow: 0 0 0 2.5px var(--accent-ring);
+}
+
+.Segmented button.On {
+	background: linear-gradient(180deg, #ffffff 0%, #f5f7fb 100%);
+	color: var(--text-primary);
+	font-weight: 600;
+	box-shadow:
+		inset 0 0.5px 0 rgba(255, 255, 255, 0.95),
+		0 1px 3px rgba(15, 20, 35, 0.13),
+		0 0.5px 1px rgba(15, 20, 35, 0.08);
+}
+
+/* macOS 26 Elastic Toggle Switch */
+.Switch {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.Switch input[type="checkbox"] {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+	margin: 0;
+}
+
+.SwitchTrack {
+	width: 38px;
+	height: 22px;
+	background: rgba(120, 120, 128, 0.24);
+	border-radius: var(--pill-radius);
+	position: relative;
+	box-shadow: inset 0 0.5px 1.5px rgba(15, 20, 35, 0.14);
+	transition: background-color 0.22s var(--spring), box-shadow 0.18s var(--spring);
+}
+
+.Switch input:focus-visible + .SwitchTrack {
+	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.Switch input:checked + .SwitchTrack {
+	background: #34c759;
+	box-shadow: inset 0 0.5px 1px rgba(0, 0, 0, 0.1);
+}
+
+.SwitchThumb {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 18px;
+	height: 18px;
+	background: linear-gradient(180deg, #ffffff 0%, #f4f6fa 100%);
+	border-radius: var(--pill-radius);
+	box-shadow:
+		inset 0 0.5px 0 rgba(255, 255, 255, 0.95),
+		0 1.5px 3px rgba(15, 20, 35, 0.22),
+		0 0.5px 1px rgba(15, 20, 35, 0.1);
+	transition: transform 0.24s var(--spring), width 0.16s var(--spring);
+}
+
+.Switch:active .SwitchThumb {
+	width: 22px;
+}
+
+.Switch input:checked + .SwitchTrack .SwitchThumb {
+	transform: translateX(16px);
+}
+
+.Switch:active input:checked + .SwitchTrack .SwitchThumb {
+	transform: translateX(12px);
+}
+
+/* Reset Pill Icon */
+.Reset {
+	font: inherit;
+	border: none;
+	background: transparent;
+	width: 22px;
+	height: 22px;
+	border-radius: var(--pill-radius);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	outline: none;
+	color: var(--text-tertiary);
+	padding: 0;
+	transition: background-color 0.18s var(--spring), color 0.18s var(--spring), transform 0.2s var(--spring);
+}
+
+.Reset:hover {
+	color: var(--accent);
+	background: rgba(0, 122, 255, 0.12);
+	transform: rotate(-45deg);
+}
+
+.Reset:focus-visible {
+	box-shadow: 0 0 0 2.5px var(--accent-ring);
+}
+
+/* Toggle & Update Layouts */
+.ToggleItem {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.ToggleHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.ToggleLabel {
+	font-size: 12.5px;
+	font-weight: 500;
+	color: var(--text-primary);
+}
+
+.UpdateCard {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+	padding-top: 2px;
+}
+
+.UpdateBox {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.UpdateInfo {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.UpdateInfo .Note {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.UpdateHighlight {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+.UpdateError {
+	color: #d93829;
+}
+
+.UpdateActions {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	flex-shrink: 0;
+}
+
+.UpdateProgress {
+	width: 100%;
+	height: 5px;
+	border-radius: var(--pill-radius);
+	background: var(--track);
+	overflow: hidden;
+}
+
+.UpdateBarFill {
+	height: 100%;
+	border-radius: var(--pill-radius);
+	background: linear-gradient(90deg, var(--accent) 0%, #34aadc 50%, var(--accent) 100%);
+	background-size: 200% 100%;
+	animation: radius-shimmer 1.6s linear infinite;
+	transition: width 0.2s var(--spring);
+}
+
+.UpdateBarFill.Indeterminate {
+	width: 45% !important;
+	animation: radius-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes radius-shimmer {
+	0% {
+		background-position: 200% 0;
+	}
+	100% {
+		background-position: -200% 0;
+	}
+}
+
+@keyframes radius-indeterminate {
+	0% {
+		transform: translateX(-100%);
+	}
+	100% {
+		transform: translateX(250%);
+	}
+}
+
+/* Capsule Action Buttons */
+.ActionBtn {
+	font: inherit;
+	font-size: 11.5px;
+	font-weight: 500;
+	padding: 4px 11px;
+	border: 0.5px solid rgba(15, 20, 35, 0.11);
+	border-radius: var(--pill-radius);
+	background: rgba(255, 255, 255, 0.72);
+	color: var(--text-primary);
+	cursor: pointer;
+	outline: none;
+	box-shadow: 0 1px 2px rgba(15, 20, 35, 0.04);
+	transition: background-color 0.18s var(--spring), color 0.18s var(--spring), border-color 0.18s var(--spring), transform 0.14s var(--spring);
+}
+
+.ActionBtn:hover:not(:disabled) {
+	background: rgba(0, 122, 255, 0.12);
+	color: var(--accent);
+	border-color: rgba(0, 122, 255, 0.28);
+}
+
+.ActionBtn:active:not(:disabled) {
+	transform: scale(0.96);
+}
+
+.ActionBtn:focus-visible {
+	box-shadow: 0 0 0 2.5px var(--accent-ring);
+}
+
+.ActionBtn:disabled {
+	opacity: 0.58;
+	cursor: default;
+}
+
+.ActionBtn.Primary {
+	background: linear-gradient(180deg, #1a8cff 0%, var(--accent) 100%);
+	color: #ffffff;
+	border-color: transparent;
+	box-shadow:
+		inset 0 0.5px 0 rgba(255, 255, 255, 0.42),
+		0 1.5px 4px rgba(0, 122, 255, 0.3);
+}
+
+.ActionBtn.Primary:hover:not(:disabled) {
+	background: linear-gradient(180deg, #2d96ff 0%, var(--accent-strong) 100%);
+	color: #ffffff;
+	border-color: transparent;
+}
+
+/* Footer */
+.Footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 2px 4px 0;
+}
+
+.Version {
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--text-tertiary);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.02em;
+}
+
+.Quit {
+	font: inherit;
+	font-size: 11.5px;
+	font-weight: 500;
+	padding: 4px 12px;
+	border: 0.5px solid rgba(15, 20, 35, 0.1);
+	border-radius: var(--pill-radius);
+	background: rgba(15, 20, 35, 0.045);
+	color: var(--text-primary);
+	cursor: pointer;
+	outline: none;
+	transition: background-color 0.18s var(--spring), color 0.18s var(--spring), border-color 0.18s var(--spring), transform 0.14s var(--spring);
+}
+
+.Quit:hover {
+	background: rgba(255, 59, 48, 0.14);
+	color: #ff3b30;
+	border-color: rgba(255, 59, 48, 0.28);
+}
+
+.Quit:active {
+	transform: scale(0.96);
+}
+
+.Quit:focus-visible {
+	box-shadow: 0 0 0 2.5px rgba(255, 59, 48, 0.35);
+}
+
+.Empty {
+	margin: 0;
+	padding: 16px 8px;
+	text-align: center;
+	font-size: 12px;
+	color: var(--text-secondary);
+}
+
+/* Dark Mode Liquid Glass */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--accent: #0a84ff;
+		--accent-strong: #0070e0;
+		--accent-ring: rgba(10, 132, 255, 0.38);
+		--track: rgba(255, 255, 255, 0.18);
+		--text-primary: rgba(245, 245, 248, 0.95);
+		--text-secondary: rgba(235, 235, 245, 0.62);
+		--text-tertiary: rgba(235, 235, 245, 0.45);
+	}
+
+	.Panel {
+		background: linear-gradient(
+			160deg,
+			rgba(40, 42, 49, 0.88) 0%,
+			rgba(28, 30, 36, 0.90) 55%,
+			rgba(22, 23, 28, 0.92) 100%
+		);
+		box-shadow:
+			inset 0 1px 0.5px rgba(255, 255, 255, 0.22),
+			inset 0 -0.5px 0 rgba(0, 0, 0, 0.42),
+			0 0 0 0.5px rgba(0, 0, 0, 0.55),
+			0 10px 24px rgba(0, 0, 0, 0.46),
+			0 2px 6px rgba(0, 0, 0, 0.3);
+	}
+
+	.Panel::before {
+		background: linear-gradient(
+			145deg,
+			rgba(255, 255, 255, 0.28) 0%,
+			rgba(255, 255, 255, 0.08) 38%,
+			rgba(255, 255, 255, 0.03) 65%,
+			rgba(255, 255, 255, 0.16) 100%
+		);
+	}
+
+	.Group {
+		background: rgba(255, 255, 255, 0.055);
+		border-color: rgba(255, 255, 255, 0.085);
+		box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+	}
+
+	.Picker {
+		background: rgba(255, 255, 255, 0.085);
+		border-color: rgba(255, 255, 255, 0.14);
+		box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.12);
+	}
+
+	.Picker:hover {
+		background: rgba(255, 255, 255, 0.14);
+		border-color: rgba(255, 255, 255, 0.24);
+	}
+
+	.Row input[type="range"]::-webkit-slider-thumb {
+		background: linear-gradient(180deg, #ffffff 0%, #e5e8f0 100%);
+		border-color: rgba(0, 0, 0, 0.25);
+	}
+
+	.Row input[type="range"]:active::-webkit-slider-thumb {
+		background: rgba(255, 255, 255, 0.82);
+	}
+
+	.Number {
+		background: rgba(255, 255, 255, 0.09);
+	}
+
+	.Segmented {
+		background: rgba(255, 255, 255, 0.08);
+		border-color: rgba(255, 255, 255, 0.06);
+	}
+
+	.Segmented button.On {
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0.18) 100%);
+		color: #ffffff;
+		box-shadow:
+			inset 0 0.5px 0 rgba(255, 255, 255, 0.3),
+			0 1px 3px rgba(0, 0, 0, 0.4);
+	}
+
+	.SwitchTrack {
+		background: rgba(120, 120, 128, 0.36);
+	}
+
+	.Switch input:checked + .SwitchTrack {
+		background: #30d158;
+	}
+
+	.Reset:hover {
+		background: rgba(10, 132, 255, 0.18);
+	}
+
+	.UpdateError {
+		color: #ff6961;
+	}
+
+	.ActionBtn {
+		background: rgba(255, 255, 255, 0.08);
+		border-color: rgba(255, 255, 255, 0.12);
+	}
+
+	.ActionBtn:hover:not(:disabled) {
+		background: rgba(10, 132, 255, 0.2);
+		color: #54a8ff;
+		border-color: rgba(10, 132, 255, 0.34);
+	}
+
+	.Quit {
+		background: rgba(255, 255, 255, 0.07);
+		border-color: rgba(255, 255, 255, 0.12);
+	}
+
+	.Quit:hover {
+		background: rgba(255, 69, 58, 0.2);
+		color: #ff5449;
+		border-color: rgba(255, 69, 58, 0.34);
+	}
+}
+
+/* Accessibility: Reduced Transparency */
+@media (prefers-reduced-transparency: reduce) {
+	.Panel {
+		background: #f5f5f7;
+	}
+
+	.Group {
+		background: #ffffff;
+	}
+}
+
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+	.Panel {
+		background: #1c1c1e;
+	}
+
+	.Group {
+		background: #2c2c2e;
+	}
+}
+
+/* Accessibility: Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+	}
+}

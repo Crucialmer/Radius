@@ -1,0 +1,37 @@
+{
+	"name": "@application/radius",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Radius Windows 便携版屏幕圆角与任务栏美化工具。",
+	"homepage": "https://github.com/Crucialmer/Radius#readme",
+	"bugs": {
+		"url": "https://github.com/Crucialmer/Radius/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Crucialmer/Radius.git"
+	},
+	"license": "CC0-1.0",
+	"author": {
+		"name": "Crucialmer",
+		"url": "https://github.com/Crucialmer/Radius"
+	},
+	"type": "module",
+	"scripts": {
+		"Build": "turbo run Build",
+		"Check": "cargo run --quiet -p Maintain -- check",
+		"Version": "cargo run --quiet -p Maintain -- version",
+		"dev": "turbo run dev",
+		"serve": "turbo run serve",
+		"start": "turbo run dev",
+		"tauri": "tauri"
+	},
+	"devDependencies": {
+		"@tauri-apps/cli": "2.12.6",
+		"turbo": "2.11.10"
+	},
+	"packageManager": "pnpm@12.16.1",
+	"engines": {
+		"node": "^22.22.3 || ^24.15.0 || >=26.0.0"
+	}
+}

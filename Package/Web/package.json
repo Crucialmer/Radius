@@ -1,0 +1,36 @@
+{
+	"name": "@application/radius-web",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Radius 控制面板与屏幕圆角覆盖层前端。",
+	"homepage": "https://github.com/Crucialmer/Radius#readme",
+	"bugs": {
+		"url": "https://github.com/Crucialmer/Radius/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Crucialmer/Radius.git"
+	},
+	"license": "CC0-1.0",
+	"author": {
+		"name": "Crucialmer",
+		"url": "https://github.com/Crucialmer/Radius"
+	},
+	"type": "module",
+	"scripts": {
+		"Build": "vite build",
+		"dev": "vite",
+		"serve": "vite preview",
+		"start": "vite"
+	},
+	"dependencies": {
+		"@tauri-apps/api": "2.12.5",
+		"solid-js": "1.9.20"
+	},
+	"devDependencies": {
+		"@playform/build": "0.3.5",
+		"@types/node": "26.6.6",
+		"vite": "8.3.8",
+		"vite-plugin-solid": "2.11.17"
+	}
+}

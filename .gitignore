@@ -1,0 +1,27 @@
+# Build output ---------------------------------------------------------------
+/Target
+/Package/Web/Target
+
+# Dependencies ---------------------------------------------------------------
+node_modules
+
+# Rust -----------------------------------------------------------------------
+# Cargo.lock is deliberately untracked: the crate publishes to crates.io and
+# every consumer resolves its own graph. `--locked` is never used in CI.
+Cargo.lock
+
+# Tauri update signer keys (private key MUST NOT be committed; the public key
+# is safe to share but kept here so the pair stays together).
+Round.key
+Round.pub
+
+# macOS ----------------------------------------------------------------------
+.DS_Store
+
+# Turbo ----------------------------------------------------------------------
+# The task cache and daemon logs are machine-local build state, never content.
+.turbo
+
+# Portable Runtime -----------------------------------------------------------
+settings.json
+/data/

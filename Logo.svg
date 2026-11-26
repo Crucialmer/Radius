@@ -1,0 +1,64 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<linearGradient id="bg" x1="26" y1="26" x2="324" y2="486" gradientUnits="userSpaceOnUse">
+			<stop offset="0%" stop-color="#282B3A" />
+			<stop offset="54%" stop-color="#151721" />
+			<stop offset="100%" stop-color="#0C0D14" />
+		</linearGradient>
+		<radialGradient id="glow" cx="142" cy="142" r="240" gradientUnits="userSpaceOnUse">
+			<stop offset="0%" stop-color="#FF3A84" stop-opacity="0.24" />
+			<stop offset="100%" stop-color="#FF5A78" stop-opacity="0" />
+		</radialGradient>
+		<linearGradient id="wash" x1="256" y1="26" x2="256" y2="232" gradientUnits="userSpaceOnUse">
+			<stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.10" />
+			<stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+		</linearGradient>
+		<linearGradient id="rim" x1="26" y1="26" x2="486" y2="486" gradientUnits="userSpaceOnUse">
+			<stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.56" />
+			<stop offset="35%" stop-color="#FFFFFF" stop-opacity="0.12" />
+			<stop offset="68%" stop-color="#FFFFFF" stop-opacity="0.07" />
+			<stop offset="100%" stop-color="#FFB9C8" stop-opacity="0.26" />
+		</linearGradient>
+		<linearGradient id="arc" x1="122" y1="104" x2="122" y2="276" gradientUnits="userSpaceOnUse">
+			<stop offset="0%" stop-color="#FF2A7E" />
+			<stop offset="52%" stop-color="#FF5C7C" />
+			<stop offset="100%" stop-color="#FF9E80" />
+		</linearGradient>
+		<linearGradient id="dot" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0%" stop-color="#FF2E80" />
+			<stop offset="100%" stop-color="#FF9C80" />
+		</linearGradient>
+		<clipPath id="tileClip">
+			<rect x="26" y="26" width="460" height="460" rx="108" />
+		</clipPath>
+	</defs>
+
+	<g clip-path="url(#tileClip)">
+		<rect x="26" y="26" width="460" height="460" rx="108" fill="url(#bg)" />
+		<circle cx="142" cy="142" r="240" fill="url(#glow)" />
+		<rect x="26" y="26" width="460" height="206" fill="url(#wash)" />
+
+		<path
+			d="M122 256V210C122 161.399 161.399 122 210 122H256"
+			stroke="url(#arc)"
+			stroke-width="37"
+			stroke-linecap="round"
+			stroke-linejoin="round" />
+
+		<g fill="url(#dot)">
+			<circle cx="323" cy="122" r="18.5" />
+			<circle cx="390" cy="122" r="18.5" />
+			<circle cx="390" cy="189" r="18.5" />
+			<circle cx="390" cy="256" r="18.5" />
+			<circle cx="390" cy="323" r="18.5" />
+			<circle cx="390" cy="390" r="18.5" />
+			<circle cx="323" cy="390" r="18.5" />
+			<circle cx="256" cy="390" r="18.5" />
+			<circle cx="189" cy="390" r="18.5" />
+			<circle cx="122" cy="390" r="18.5" />
+			<circle cx="122" cy="323" r="18.5" />
+		</g>
+	</g>
+
+	<rect x="27.5" y="27.5" width="457" height="457" rx="106.5" stroke="url(#rim)" stroke-width="2.75" />
+</svg>

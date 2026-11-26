@@ -1,0 +1,133 @@
+name: Check
+
+concurrency:
+  group: Check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [Current]
+  pull_request:
+    branches: [Current]
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  ADBLOCK: true
+  ASTRO_TELEMETRY_DISABLED: 1
+  AUTOMATEDLAB_TELEMETRY_OPTOUT: 1
+  AZURE_CORE_COLLECT_TELEMETRY: 0
+  CARGO_TERM_COLOR: always
+  DO_NOT_TRACK: 1
+  POWERSHELL_TELEMETRY_OPTOUT: 1
+  TELEMETRY_DISABLED: 1
+
+jobs:
+  Web:
+    name: webview build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve Unix LF line endings for rustfmt
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            package.json
+            Package/Web/package.json
+
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        run: pnpm run Build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Web
+          path: Package/Web/Target
+          if-no-files-found: error
+          retention-days: 5
+
+  Rust:
+    name: fmt, clippy, check (Windows)
+    needs: Web
+    runs-on: windows-latest
+    steps:
+      - name: Preserve Unix LF line endings for rustfmt
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            Target/
+          key: cargo-check-windows-${{ hashFiles('Cargo.toml', 'Crate/**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: cargo-check-windows-
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Web
+          path: Package/Web/Target
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+  Package:
+    name: packaging guard
+    needs: Rust
+    runs-on: windows-latest
+    steps:
+      - name: Preserve Unix LF line endings for rustfmt
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly
+
+      - name: Published tarball carries the crate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tarball = (cargo package -p pround --list --allow-dirty) -replace '\\', '/'
+          $required = @(
+            'Source/Library.rs',
+            'Source/Main.rs',
+            'Source/Tray/mod.rs',
+            'tauri.conf.json',
+            'capabilities/default.json',
+            'icons/tray.png',
+            'README.md'
+          )
+          foreach ($file in $required) {
+            if (-not ($tarball -contains $file)) {
+              Write-Error "$file is missing from the published tarball"
+              exit 1
+            }
+          }
+          Write-Host "packaging guard: $($tarball.Count) files, all required entries present"

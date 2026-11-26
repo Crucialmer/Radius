@@ -1,0 +1,63 @@
+[package]
+name = "pround"
+description = "Radius: a transparent, click-through overlay that draws Apple Squircle rounded corners on every connected Windows monitor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["tauri", "rounded", "overlay", "monitor", "windows"]
+categories = ["gui"]
+
+# `Package/Web/Target` is vite's output and is embedded into the binary at
+# compile time. It lives outside the crate, so there is nothing to stage; the
+# library target does not need it at all.
+include = [
+	"/Source/**",
+	"/icons/**",
+	"/capabilities/**",
+	"/tauri.conf.json",
+	"/build.rs",
+]
+
+[lib]
+name = "pround"
+path = "Source/Library.rs"
+
+[[bin]]
+name = "Radius"
+path = "Source/Main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.7", features = ["tray-icon"] }
+tauri-plugin-store = "2.5.1"
+
+# The `test` feature gives `tauri::test`, whose mock runtime can drive a real IPC
+# request into the same handler the binary registers. Features are additive, so
+# this does not change what the binary links.
+[dev-dependencies]
+tauri = { version = "2.12.7", features = ["tray-icon", "test"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+	"Win32_Foundation",
+	"Win32_Graphics_Dwm",
+	"Win32_Graphics_Gdi",
+	"Win32_Networking_WinHttp",
+	"Win32_Security",
+	"Win32_System_Registry",
+	"Win32_UI_Accessibility",
+	"Win32_UI_Shell",
+	"Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+default = []

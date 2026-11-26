@@ -1,0 +1,141 @@
+name: Build
+
+concurrency:
+  group: Build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags: ["Radius/v*", "v*"]
+  workflow_dispatch:
+
+env:
+  ADBLOCK: true
+  ASTRO_TELEMETRY_DISABLED: 1
+  AUTOMATEDLAB_TELEMETRY_OPTOUT: 1
+  AZURE_CORE_COLLECT_TELEMETRY: 0
+  CARGO_TERM_COLOR: always
+  DO_NOT_TRACK: 1
+  POWERSHELL_TELEMETRY_OPTOUT: 1
+  TELEMETRY_DISABLED: 1
+
+jobs:
+  Release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  Web:
+    name: webview build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            package.json
+            Package/Web/package.json
+
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        run: pnpm run Build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Web
+          path: Package/Web/Target
+          if-no-files-found: error
+          retention-days: 5
+
+  Bundle:
+    name: Windows x86_64 Build
+    needs: [Release, Web]
+    if: always() && needs.Web.result == 'success' && (needs.Release.result == 'success' || needs.Release.result == 'skipped')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: nightly
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            Target/
+          key: cargo-build-windows-x86_64-pc-windows-msvc-${{ hashFiles('Cargo.toml', 'Crate/**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: cargo-build-windows-x86_64-pc-windows-msvc-
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            package.json
+            Package/Web/package.json
+
+      - name: Install
+        run: pnpm install --no-frozen-lockfile
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Web
+          path: Package/Web/Target
+
+      - name: Build Radius (Windows portable binary)
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --no-bundle
+
+      - name: Package portable zip & checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (cargo run --quiet -p Maintain -- version).Trim()
+          if (-not $version) { throw "Cannot resolve version from Maintain" }
+
+          $bin = "Target/x86_64-pc-windows-msvc/release/Radius.exe"
+          if (-not (Test-Path $bin)) { throw "Missing $bin" }
+
+          New-Item -ItemType Directory -Path "dist" -Force | Out-Null
+          $zipName = "Radius.zip"
+          Compress-Archive -Path $bin -DestinationPath "dist/$zipName" -CompressionLevel Optimal -Force
+
+          $hash = (Get-FileHash "dist/$zipName" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zipName" | Out-File -FilePath "dist/SHA256SUMS-Radius.txt" -Encoding ascii
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Radius-windows-x64
+          path: dist/*
+          retention-days: 5
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

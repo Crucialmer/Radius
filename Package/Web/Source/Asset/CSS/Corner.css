@@ -1,0 +1,138 @@
+.Corner {
+	/* Authentic Apple continuous corner spans 1.528665 * R along each edge so the
+	   requested radius R matches visual bezel curvature while keeping κ = 0 at joins. */
+	width: calc(var(--Corner, 15px) * 1.528665);
+	height: calc(var(--Corner, 15px) * 1.528665);
+	position: absolute;
+	pointer-events: none;
+	user-select: none;
+	overflow: hidden;
+
+	/* 8K GPU layer containment: isolates corner rasterization to prevent full-screen repaints. */
+	contain: layout paint size;
+	will-change: transform;
+	backface-visibility: hidden;
+}
+
+.Corner[data-corner="BottomLeft"] {
+	transform: rotate(270deg) translateZ(0);
+	bottom: 0;
+	left: 0;
+}
+
+.Corner[data-corner="BottomRight"] {
+	transform: rotate(180deg) translateZ(0);
+	bottom: 0;
+	right: 0;
+}
+
+.Corner[data-corner="WorkBottomLeft"] {
+	transform: rotate(270deg) translateZ(0);
+	bottom: var(--WorkBottom, 0px);
+	left: var(--WorkLeft, 0px);
+}
+
+.Corner[data-corner="WorkBottomRight"] {
+	transform: rotate(180deg) translateZ(0);
+	bottom: var(--WorkBottom, 0px);
+	right: var(--WorkRight, 0px);
+}
+
+.Corner[data-corner="TopLeft"] {
+	transform: translateZ(0);
+	top: 0;
+	left: 0;
+}
+
+.Corner[data-corner="TopRight"] {
+	transform: rotate(90deg) translateZ(0);
+	top: 0;
+	right: 0;
+}
+
+.Corner-Svg {
+	width: 100%;
+	height: 100%;
+	display: block;
+	shape-rendering: geometricPrecision;
+}
+
+.Corner-Shape {
+	fill: #000000;
+	transition: fill 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.Window[data-mode="light"] .Corner-Shape {
+	fill: #ffffff;
+}
+
+/* Anti-aliased Liquid Glass rim straddling the clipped taskbar boundary. */
+.TaskbarRim {
+	position: absolute;
+	pointer-events: none;
+	user-select: none;
+	contain: layout paint size;
+	will-change: transform;
+	transform: translateZ(0);
+}
+
+.TaskbarRim-Svg {
+	width: 100%;
+	height: 100%;
+	display: block;
+	overflow: visible;
+	shape-rendering: geometricPrecision;
+}
+
+.TaskbarRim-Outer {
+	fill: none;
+	stroke: rgba(15, 18, 26, 0.18);
+	stroke-width: 1.4;
+}
+
+.TaskbarRim-Specular {
+	fill: none;
+	stroke-width: 1.1;
+}
+
+.TaskbarRim-StopTop {
+	stop-color: #ffffff;
+	stop-opacity: 0.62;
+}
+
+.TaskbarRim-StopMid {
+	stop-color: #ffffff;
+	stop-opacity: 0.24;
+}
+
+.TaskbarRim-StopBottom {
+	stop-color: #ffffff;
+	stop-opacity: 0.12;
+}
+
+@media (prefers-color-scheme: dark) {
+	.TaskbarRim-Outer {
+		stroke: rgba(0, 0, 0, 0.36);
+	}
+
+	.TaskbarRim-StopTop {
+		stop-color: #ffffff;
+		stop-opacity: 0.28;
+	}
+
+	.TaskbarRim-StopMid {
+		stop-color: #ffffff;
+		stop-opacity: 0.11;
+	}
+
+	.TaskbarRim-StopBottom {
+		stop-color: #ffffff;
+		stop-opacity: 0.05;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.Corner-Shape {
+		transition: none;
+	}
+}
