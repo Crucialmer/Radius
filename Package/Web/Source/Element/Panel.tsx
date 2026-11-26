@@ -259,71 +259,13 @@ export default () => {
 								/>
 
 								<p class="Note">Apple G2 连续曲率，默认 15px；点击右侧 ↺ 可恢复默认</p>
-							</div>
 
-							<div class="Group">
-								<h2 class="Title">
-									<svg class="SectionIcon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-										<rect
-											x="1.75"
-											y="9.75"
-											width="12.5"
-											height="4"
-											rx="2"
-											stroke="currentColor"
-											stroke-width="1.35"
-										/>
-										<rect
-											x="3"
-											y="2.5"
-											width="10"
-											height="5.25"
-											rx="1.5"
-											stroke="currentColor"
-											stroke-width="1.25"
-											opacity="0.65"
-										/>
-									</svg>
-									任务栏与窗口
-								</h2>
-
-								<Row
-									label="任务栏圆角"
-									hint="所有显示器的任务栏共用此值，已启用边缘抗锯齿流光描边"
-									reset="恢复默认值（8）"
-									Reset={() => void call("reset", { setting:"taskbar_radius" })}>
-									<Slider
-										value={state().taskbar_radius}
-										maximum={state().taskbar_maximum}
-										Commit={(value) => void call("set_taskbar_size", { value })}
-									/>
-								</Row>
-
-								<div class="ToggleItem">
-									<div class="ToggleHeader">
-										<span class="ToggleLabel">任务栏四角圆角</span>
-										<label class="Switch" title="将 Windows 任务栏裁切为圆角并叠加抗锯齿玻璃描边">
-											<input
-												type="checkbox"
-												checked={state().taskbar_rounded}
-												onChange={(event) =>
-													void call("set_taskbar_rounded", {
-														enabled: event.currentTarget.checked,
-													})
-												}
-											/>
-											<span class="SwitchTrack">
-												<span class="SwitchThumb" />
-											</span>
-										</label>
-									</div>
-									<p class="Note">四角平滑裁切并叠加抗锯齿 Liquid Glass 玻璃边缘</p>
-								</div>
+								<hr class="GroupDivider" />
 
 								<div class="ToggleItem">
 									<div class="ToggleHeader">
 										<span class="ToggleLabel">最大化底部圆角</span>
-										<label class="Switch" title="软件窗口最大化时为其底部紧邻任务栏的两角添加圆角">
+										<label class="Switch" title="窗口最大化时为其底部紧邻任务栏的两角添加与屏幕一致的圆角">
 											<input
 												type="checkbox"
 												checked={state().maximize_corners}
@@ -338,8 +280,63 @@ export default () => {
 											</span>
 										</label>
 									</div>
-									<p class="Note">窗口最大化时自动为紧贴任务栏上方的两角补齐圆角</p>
+									<p class="Note">跟随上方屏幕圆角的大小、颜色与显隐，为最大化窗口底部补齐圆角</p>
 								</div>
+							</div>
+
+							<div class="Group">
+								<h2 class="Title">
+									<svg class="SectionIcon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+										<rect
+											x="1.75"
+											y="5.5"
+											width="12.5"
+											height="5"
+											rx="2.5"
+											stroke="currentColor"
+											stroke-width="1.4"
+										/>
+										<circle cx="5.25" cy="8" r="0.9" fill="currentColor" />
+										<circle cx="8" cy="8" r="0.9" fill="currentColor" />
+										<circle cx="10.75" cy="8" r="0.9" fill="currentColor" />
+									</svg>
+									任务栏圆角
+								</h2>
+
+								<div class="ToggleItem">
+									<div class="ToggleHeader">
+										<span class="ToggleLabel">任务栏四角圆角</span>
+										<label class="Switch" title="独立裁切任务栏四角并叠加抗锯齿玻璃描边，不参与屏幕圆角设置">
+											<input
+												type="checkbox"
+												checked={state().taskbar_rounded}
+												onChange={(event) =>
+													void call("set_taskbar_rounded", {
+														enabled: event.currentTarget.checked,
+													})
+												}
+											/>
+											<span class="SwitchTrack">
+												<span class="SwitchThumb" />
+											</span>
+										</label>
+									</div>
+									<p class="Note">独立于屏幕圆角；开启后任务栏处单独裁切并叠加抗锯齿玻璃描边</p>
+								</div>
+
+								<Row
+									label="圆角大小"
+									hint="所有显示器的任务栏共用此独立圆角值，默认 8px，不与屏幕圆角联动"
+									disabled={!state().taskbar_rounded}
+									reset="恢复默认值（8）"
+									Reset={() => void call("reset", { setting:"taskbar_radius" })}>
+									<Slider
+										value={state().taskbar_radius}
+										maximum={state().taskbar_maximum}
+										disabled={!state().taskbar_rounded}
+										Commit={(value) => void call("set_taskbar_size", { value })}
+									/>
+								</Row>
 							</div>
 
 							<div class="Group">

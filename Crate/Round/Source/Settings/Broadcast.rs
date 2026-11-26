@@ -8,7 +8,7 @@ use crate::{
 	Message::{Enum::Enum as Message, Payload::Struct as Payload},
 	Per::Of as PerOf,
 	Settings::Struct::Struct,
-	Visibility::Apply,
+	Visibility::{Apply, Enum::Enum as Visibility},
 };
 
 /// Push the current state to every overlay window.
@@ -54,12 +54,27 @@ pub fn Fn<R:Runtime>(State:&Struct, App:&AppHandle<R>) {
 				Payload { Message:Message::Mode(PerOf::Fn(&State.Ink, &Label)) },
 			);
 
+			let ScreenVis = PerOf::Fn(&State.Visible, &Label);
+
+			let ShowScreen = matches!(ScreenVis, Visibility::Shown);
+
+			let _ = Window.emit_to(
+				Label.as_str(),
+				"screen_visible",
+				Payload { Message:Message::ScreenVisible(ShowScreen) },
+			);
+
 			let _ = Window.emit_to(
 				Label.as_str(),
 				"maximize_corners",
 				Payload { Message:Message::MaximizeCorners(State.MaximizeCorners) },
 			);
 
-			let _ = Apply::Fn(PerOf::Fn(&State.Visible, &Label), &Window);
+			// Keep the overlay window shown while independent taskbar rounding is
+			// active so the anti-aliased taskbar rim stays visible even when screen
+			// corners are hidden.
+			let WindowVis = if ShowScreen || State.TaskbarRounded { Visibility::Shown } else { Visibility::Hidden };
+
+			let _ = Apply::Fn(WindowVis, &Window);
 		});
 }

@@ -1,6 +1,7 @@
 //! Rounding all 4 corners of the Windows taskbar (`Shell_TrayWnd` / `Shell_SecondaryTrayWnd`)
-//! and publishing per-monitor taskbar geometry so the overlay can wrap the 1-bit GDI clip
-//! seam in a hardware-anti-aliased Liquid Glass rim.
+//! and publishing per-monitor taskbar geometry and screen-edge ownership so the overlay
+//! can wrap the 1-bit GDI clip seam in a hardware-anti-aliased Liquid Glass rim and keep
+//! taskbar corners completely independent from screen corner settings.
 
 use std::{collections::HashMap, sync::Mutex};
 
@@ -12,6 +13,22 @@ use crate::{
 	Screen::Struct::Struct as Screen,
 };
 
+/// Logical taskbar overlay snapshot used for initial window script injection.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+	pub Visible:bool,
+	pub Edge:&'static str,
+	pub Left:f64,
+	pub Top:f64,
+	pub Width:f64,
+	pub Height:f64,
+	pub Radius:f64,
+}
+
+impl Default for Frame {
+	fn default() -> Self { Self { Visible:false, Edge:"none", Left:0.0, Top:0.0, Width:0.0, Height:0.0, Radius:0.0 } }
+}
+
 /// Cached taskbar geometry & applied ellipse diameter: `(hwnd, width, height, diameter)`.
 static Cache:Mutex<Vec<(isize, i32, i32, i32)>> = Mutex::new(Vec::new());
 
@@ -19,6 +36,7 @@ static Cache:Mutex<Vec<(isize, i32, i32, i32)>> = Mutex::new(Vec::new());
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FrameKey {
 	Visible:bool,
+	Edge:&'static str,
 	Left:i32,
 	Top:i32,
 	Width:i32,
@@ -47,6 +65,27 @@ const PrimaryClass:[u16; 14] = EncodeWide(b"Shell_TrayWnd\0");
 
 #[cfg(target_os = "windows")]
 const SecondaryClass:[u16; 23] = EncodeWide(b"Shell_SecondaryTrayWnd\0");
+
+#[cfg(target_os = "windows")]
+fn DetectEdge(Rect:&windows_sys::Win32::Foundation::RECT, ScreenItem:&Screen) -> &'static str {
+	let Width = Rect.right - Rect.left;
+
+	let Height = Rect.bottom - Rect.top;
+
+	if Width >= Height {
+		if Rect.top <= ScreenItem.PhysicalY + 4 && Rect.bottom < ScreenItem.PhysicalY + ScreenItem.Pixels.1 - 4 {
+			"top"
+		} else {
+			"bottom"
+		}
+	} else if Rect.left <= ScreenItem.PhysicalX + 4 {
+		"left"
+	} else if Rect.right >= ScreenItem.PhysicalX + ScreenItem.Pixels.0 - 4 {
+		"right"
+	} else {
+		"none"
+	}
+}
 
 /// Locate every visible primary and secondary Windows taskbar in O(1) without
 /// enumerating all desktop windows.
@@ -79,14 +118,14 @@ pub fn FindVisible() -> Vec<windows_sys::Win32::Foundation::HWND> {
 	Result
 }
 
-/// Compute the initial anti-aliased taskbar rim frame for one monitor at window
-/// creation time so the first paint already aligns with the clipped taskbar.
+/// Compute the initial anti-aliased taskbar rim frame and occupied edge for one
+/// monitor at window creation time so the first paint already aligns cleanly.
 #[cfg(target_os = "windows")]
-pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> (bool, f64, f64, f64, f64, f64) {
+pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> Frame {
 	use windows_sys::Win32::{Foundation::RECT, UI::WindowsAndMessaging::GetWindowRect};
 
-	if !Enabled || TaskbarRadius.Value() <= 0 {
-		return (false, 0.0, 0.0, 0.0, 0.0, 0.0);
+	if !Enabled {
+		return Frame::default();
 	}
 
 	let Scale = ScreenItem.ScaleFactor.max(1.0);
@@ -119,29 +158,27 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> (
 
 			let Clamped = RadiusPx.clamp(0, (Height / 2).min(Width / 2));
 
-			return (
-				Clamped > 0,
-				f64::from(Rect.left - ScreenItem.PhysicalX) / Scale,
-				f64::from(Rect.top - ScreenItem.PhysicalY) / Scale,
-				f64::from(Width) / Scale,
-				f64::from(Height) / Scale,
-				f64::from(Clamped) / Scale,
-			);
+			return Frame {
+				Visible:Clamped > 0,
+				Edge:DetectEdge(&Rect, ScreenItem),
+				Left:f64::from(Rect.left - ScreenItem.PhysicalX) / Scale,
+				Top:f64::from(Rect.top - ScreenItem.PhysicalY) / Scale,
+				Width:f64::from(Width) / Scale,
+				Height:f64::from(Height) / Scale,
+				Radius:f64::from(Clamped) / Scale,
+			};
 		}
 	}
 
-	(false, 0.0, 0.0, 0.0, 0.0, 0.0)
+	Frame::default()
 }
 
 /// Non-Windows fallback.
 #[cfg(not(target_os = "windows"))]
-pub fn InitialFrame(_ScreenItem:&Screen, _Enabled:bool, _TaskbarRadius:Radius) -> (bool, f64, f64, f64, f64, f64) {
-	(false, 0.0, 0.0, 0.0, 0.0, 0.0)
-}
+pub fn InitialFrame(_ScreenItem:&Screen, _Enabled:bool, _TaskbarRadius:Radius) -> Frame { Frame::default() }
 
 /// Apply 4-corner rounded rectangle clipping to every Windows taskbar and sync
-/// each monitor's anti-aliased Liquid Glass rim, or restore native rectangular
-/// geometry when disabled.
+/// each monitor's anti-aliased Liquid Glass rim and independent edge status.
 #[cfg(target_os = "windows")]
 pub fn Apply<R:Runtime>(
 	App:&AppHandle<R>,
@@ -242,12 +279,15 @@ pub fn Apply<R:Runtime>(
 		if let Some(Item) = MatchedScreen {
 			let Covered = Fullscreen.iter().any(|Label| Label == &Item.Label);
 
+			let Edge = if Covered { "none" } else { DetectEdge(&Rect, Item) };
+
 			let Visible = Clamped > 0 && !Covered;
 
 			NextFrames.insert(
 				Item.Label.clone(),
 				FrameKey {
 					Visible,
+					Edge,
 					Left:Rect.left - Item.PhysicalX,
 					Top:Rect.top - Item.PhysicalY,
 					Width,
@@ -271,7 +311,7 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 
 	let Map = Guard.get_or_insert_with(HashMap::new);
 
-	let Hidden = FrameKey { Visible:false, Left:0, Top:0, Width:0, Height:0, Radius:0 };
+	let Hidden = FrameKey { Visible:false, Edge:"none", Left:0, Top:0, Width:0, Height:0, Radius:0 };
 
 	for Item in Screens {
 		let Target = Next.get(&Item.Label).copied().unwrap_or(Hidden);
@@ -288,6 +328,7 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 			Payload {
 				Message:Message::TaskbarFrame {
 					Visible:Target.Visible,
+					Edge:Target.Edge,
 					Left:f64::from(Target.Left) / Scale,
 					Top:f64::from(Target.Top) / Scale,
 					Width:f64::from(Target.Width) / Scale,

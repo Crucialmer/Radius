@@ -13,8 +13,21 @@ use crate::{Mode::Enum::Enum as Mode, Radius::Struct::Struct as Radius};
 pub enum Enum {
 	Mode(Mode),
 	Size(Radius),
+	ScreenVisible(bool),
 	MaximizeCorners(bool),
 	Maximized(bool),
-	WorkInset { Left:f64, Right:f64, Bottom:f64 },
-	TaskbarFrame { Visible:bool, Left:f64, Top:f64, Width:f64, Height:f64, Radius:f64 },
+	WorkInset {
+		Left:f64,
+		Right:f64,
+		Bottom:f64,
+	},
+	TaskbarFrame {
+		Visible:bool,
+		Edge:&'static str,
+		Left:f64,
+		Top:f64,
+		Width:f64,
+		Height:f64,
+		Radius:f64,
+	},
 }

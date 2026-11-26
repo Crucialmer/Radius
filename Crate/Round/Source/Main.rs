@@ -10,7 +10,7 @@ use pround::{
 	Screen::{All as ScreenAll, Registry},
 	Settings::{Load as SettingsLoad, Save as SettingsSave, Script, Store::Fn as StorePath},
 	Tray::Install,
-	Visibility::Apply as VisibilityApply,
+	Visibility::{Apply as VisibilityApply, Enum::Enum as Visibility},
 	Window::Chrome,
 };
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
@@ -113,7 +113,13 @@ fn main() {
 
 				Platform::Art(&Window);
 
-				VisibilityApply::Fn(PerOf::Fn(&Preferences.Visible, &Screen.Label), &Window)
+				let WindowVis = match PerOf::Fn(&Preferences.Visible, &Screen.Label) {
+					Visibility::Shown => Visibility::Shown,
+					Visibility::Hidden if Preferences.TaskbarRounded => Visibility::Shown,
+					Visibility::Hidden => Visibility::Hidden,
+				};
+
+				VisibilityApply::Fn(WindowVis, &Window)
 			})?;
 
 			Install::Fn(App.handle())?;

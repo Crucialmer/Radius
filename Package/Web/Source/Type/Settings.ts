@@ -5,9 +5,13 @@
 /** The two inks a corner can be drawn in - the words the Rust `Mode` enum serialises to. */
 export type Mode = "dark" | "light";
 
+/** Which monitor edge an independent rounded taskbar currently occupies. */
+export type TaskbarEdge = "none" | "bottom" | "top" | "left" | "right";
+
 /** Anti-aliased taskbar overlay frame in logical pixels relative to this monitor. */
 export type TaskbarFrame = {
 	Visible: boolean;
+	Edge?: TaskbarEdge;
 	Left: number;
 	Top: number;
 	Width: number;
@@ -20,6 +24,8 @@ export type Settings = {
 	size: number;
 
 	mode: Mode;
+
+	screenVisible?: boolean;
 
 	maximizeCorners: boolean;
 
@@ -42,6 +48,11 @@ export type SizeMessage = {
 /** `listen("mode", ...)` payload: `Message::Mode` is externally tagged. */
 export type ModeMessage = {
 	message: { Mode: Mode };
+};
+
+/** `listen("screen_visible", ...)` payload: `Message::ScreenVisible`. */
+export type ScreenVisibleMessage = {
+	message: { ScreenVisible: boolean };
 };
 
 /** `listen("maximize_corners", ...)` payload: `Message::MaximizeCorners`. */

@@ -11,27 +11,34 @@ import type {
 	MaximizeCornersMessage,
 	MaximizedMessage,
 	ModeMessage,
+	ScreenVisibleMessage,
 	SizeMessage,
 	TaskbarFrame,
 	TaskbarFrameMessage,
 	WorkInsetMessage,
 } from "./Type/Settings.js";
 
-const Corners = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"];
+const AllCorners = ["BottomLeft", "BottomRight", "TopLeft", "TopRight"];
 const WorkCorners = ["WorkBottomLeft", "WorkBottomRight"];
 
 /**
- * One overlay: four G2 Squircle screen corners, optional maximized bottom
- * corners above the taskbar, and an anti-aliased Liquid Glass taskbar rim.
+ * One overlay:
+ * - Screen corners (and maximized-window bottom corners) controlled by screen settings;
+ *   when independent taskbar rounding is active on an edge, those two taskbar-edge
+ *   corners are excluded from screen corner painting.
+ * - Independent anti-aliased Liquid Glass taskbar rim, unaffected by screen corner settings.
  */
 function Overlay() {
 	const Current = getCurrentWebviewWindow();
 
-	/** The ink this monitor's corners are drawn in. */
+	/** The ink this monitor's screen & maximized corners are drawn in. */
 	const [Mode, setMode] = createSignal(window.settings.mode);
 
-	/** The corner radius this monitor is drawn with, in logical pixels. */
+	/** The corner radius this monitor's screen & maximized corners use, in logical pixels. */
 	const [Radius, setRadius] = createSignal(window.settings.size);
+
+	/** Whether this monitor's screen & maximized corners are currently visible. */
+	const [ScreenVisible, setScreenVisible] = createSignal(window.settings.screenVisible ?? true);
 
 	/** Whether maximized-window bottom corner rounding is enabled. */
 	const [MaximizeCorners, setMaximizeCorners] = createSignal(Boolean(window.settings.maximizeCorners));
@@ -46,10 +53,11 @@ function Overlay() {
 		Bottom: window.settings.workBottom ?? 0,
 	});
 
-	/** Anti-aliased taskbar rim frame pushed by the Windows watcher. */
+	/** Independent taskbar rim frame and occupied edge pushed by the Windows watcher. */
 	const [Taskbar, setTaskbar] = createSignal<TaskbarFrame>(
 		window.settings.taskbarFrame ?? {
 			Visible: false,
+			Edge: "none",
 			Left: 0,
 			Top: 0,
 			Width: 0,
@@ -58,7 +66,19 @@ function Overlay() {
 		},
 	);
 
-	const ShowMaxCorners = () => MaximizeCorners() && Maximized() && WorkInset().Bottom > 1;
+	/** Screen corners excluding the edge owned by an active independent rounded taskbar. */
+	const ActiveScreenCorners = () => {
+		const Edge = Taskbar().Edge ?? "none";
+
+		if (Edge === "bottom") return ["TopLeft", "TopRight"];
+		if (Edge === "top") return ["BottomLeft", "BottomRight"];
+		if (Edge === "left") return ["TopRight", "BottomRight"];
+		if (Edge === "right") return ["TopLeft", "BottomLeft"];
+
+		return AllCorners;
+	};
+
+	const ShowMaxCorners = () => ScreenVisible() && MaximizeCorners() && Maximized() && WorkInset().Bottom > 1;
 
 	const ShowTaskbarRim = () => Taskbar().Visible && Taskbar().Radius > 0 && Taskbar().Width > 2 && Taskbar().Height > 2;
 
@@ -83,6 +103,9 @@ function Overlay() {
 
 		Register<ModeMessage>("mode", (payload) => setMode(payload.message.Mode));
 		Register<SizeMessage>("size", (payload) => setRadius(payload.message.Size));
+		Register<ScreenVisibleMessage>("screen_visible", (payload) =>
+			setScreenVisible(payload.message.ScreenVisible),
+		);
 		Register<MaximizeCornersMessage>("maximize_corners", (payload) =>
 			setMaximizeCorners(payload.message.MaximizeCorners),
 		);
@@ -102,7 +125,9 @@ function Overlay() {
 			data-label={Current.label}
 			data-mode={Mode()}
 			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}px; --WorkRight: ${WorkInset().Right}px; --WorkBottom: ${WorkInset().Bottom}px`}>
-			<For each={Corners}>{(corner) => <Corner id={corner} />}</For>
+			<Show when={ScreenVisible()}>
+				<For each={ActiveScreenCorners()}>{(corner) => <Corner id={corner} />}</For>
+			</Show>
 			<Show when={ShowMaxCorners()}>
 				<For each={WorkCorners}>{(corner) => <Corner id={corner} />}</For>
 			</Show>
