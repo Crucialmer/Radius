@@ -1753,6 +1753,53 @@ fn TickAnimations(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Mo
 	AnyAnimating
 }
 
+/// Convert a display refresh rate in Hz into `(due_time_100ns, fallback_sleep_ms)`,
+/// clamping valid rates to `30..=240 Hz` and defaulting invalid readings to `60 Hz`.
+fn RefreshHzToInterval100ns(Hz:f64) -> (i64, u32) {
+	let EffectiveHz = if Hz.is_finite() && Hz > 1.0 { Hz.clamp(30.0, 240.0) } else { 60.0 };
+
+	let Interval100ns = -((10_000_000.0 / EffectiveHz).round() as i64);
+
+	let FallbackMs = (1000.0 / EffectiveHz).round().clamp(4.0, 34.0) as u32;
+
+	(Interval100ns, FallbackMs)
+}
+
+/// Query the live DWM composition timing rate (or active display mode refresh rate
+/// fallback) so animations run 1:1 at the monitor's real refresh rate (`60–240 Hz`).
+pub fn DisplayFrameInterval100ns() -> (i64, u32) {
+	use windows_sys::Win32::Graphics::{
+		Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo},
+		Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW},
+	};
+
+	unsafe {
+		let mut Info:DWM_TIMING_INFO = std::mem::zeroed();
+
+		Info.cbSize = std::mem::size_of::<DWM_TIMING_INFO>() as u32;
+
+		if DwmGetCompositionTimingInfo(std::ptr::null_mut(), &mut Info) == 0
+			&& Info.rateCompose.uiDenominator > 0
+			&& Info.rateCompose.uiNumerator > 0
+		{
+			let Hz = f64::from(Info.rateCompose.uiNumerator) / f64::from(Info.rateCompose.uiDenominator);
+
+			return RefreshHzToInterval100ns(Hz);
+		}
+
+		let mut Mode:DEVMODEW = std::mem::zeroed();
+
+		Mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+
+		if EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut Mode) != 0 && Mode.dmDisplayFrequency > 1
+		{
+			return RefreshHzToInterval100ns(f64::from(Mode.dmDisplayFrequency));
+		}
+	}
+
+	RefreshHzToInterval100ns(60.0)
+}
+
 fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 	use std::time::Instant;
 
@@ -1874,6 +1921,8 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 
 	let mut Surfaces:HashMap<String, MonitorSurface> = HashMap::new();
 
+	let mut FrameInterval = DisplayFrameInterval100ns();
+
 	let mut Animating = SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
 
 	let mut LastTick = Instant::now();
@@ -1886,6 +1935,7 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 	                 CoreOpt:&mut Option<GpuCore>,
 	                 Surfaces:&mut HashMap<String, MonitorSurface>,
 	                 Animating:&mut bool,
+	                 FrameInterval:&mut (i64, u32),
 	                 LastTick:&mut Instant,
 	                 ShutdownRequested:&mut bool| {
 		match Msg.message {
@@ -1894,8 +1944,12 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 
 				*Animating = SyncSurfaces(CoreOpt, Surfaces, &OverlayClass);
 
-				if !WasAnimating && *Animating {
-					*LastTick = Instant::now();
+				if *Animating {
+					*FrameInterval = DisplayFrameInterval100ns();
+
+					if !WasAnimating {
+						*LastTick = Instant::now();
+					}
 				}
 			}
 			WM_APP_HIDE_ALL => {
@@ -1927,6 +1981,7 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 					&mut CoreOpt,
 					&mut Surfaces,
 					&mut Animating,
+					&mut FrameInterval,
 					&mut LastTick,
 					&mut ShutdownRequested,
 				);
@@ -1937,6 +1992,7 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 						&mut CoreOpt,
 						&mut Surfaces,
 						&mut Animating,
+						&mut FrameInterval,
 						&mut LastTick,
 						&mut ShutdownRequested,
 					);
@@ -1946,8 +2002,8 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 			}
 
 			if !TimerHandle.is_null() {
-				// 4.1667 ms one-shot pacing = 240 Hz GPU spring refresh (0% CPU when idle).
-				let DueTime:i64 = -41_667;
+				// Adapt frame pacing dynamically to the active display's refresh rate (60–240 Hz; 0% CPU when idle).
+				let DueTime:i64 = FrameInterval.0;
 
 				let Armed = windows_sys::Win32::System::Threading::SetWaitableTimer(
 					TimerHandle,
@@ -1965,14 +2021,14 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 						1,
 						Handles.as_ptr(),
 						0,
-						16,
+						FrameInterval.1.max(16),
 						windows_sys::Win32::UI::WindowsAndMessaging::QS_ALLINPUT,
 					);
 				} else {
-					std::thread::sleep(std::time::Duration::from_millis(4));
+					std::thread::sleep(std::time::Duration::from_millis(u64::from(FrameInterval.1)));
 				}
 			} else {
-				std::thread::sleep(std::time::Duration::from_millis(4));
+				std::thread::sleep(std::time::Duration::from_millis(u64::from(FrameInterval.1)));
 			}
 
 			let mut HadSync = false;
@@ -1993,6 +2049,7 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 					&mut CoreOpt,
 					&mut Surfaces,
 					&mut Animating,
+					&mut FrameInterval,
 					&mut LastTick,
 					&mut ShutdownRequested,
 				);
@@ -2010,6 +2067,10 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 
 			if HadSync {
 				Animating = SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
+
+				if Animating {
+					FrameInterval = DisplayFrameInterval100ns();
+				}
 			}
 
 			Animating |= TickAnimations(&mut CoreOpt, &mut Surfaces, DtSec);
@@ -2039,14 +2100,31 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 mod tests {
 	use super::{
 		ComputeRimLayout,
+		DisplayFrameInterval100ns,
 		GpuCore,
 		MonitorSprings,
 		MonitorVisualKey,
+		RefreshHzToInterval100ns,
 		ShaderPipeline,
 		SpringScalar,
 		TaskbarRimState,
 		WorkInsetState,
 	};
+
+	#[test]
+	fn RefreshIntervalAdaptsAndClampsDisplayRates() {
+		assert_eq!(RefreshHzToInterval100ns(60.0), (-166_667, 17));
+		assert_eq!(RefreshHzToInterval100ns(120.0), (-83_333, 8));
+		assert_eq!(RefreshHzToInterval100ns(144.0), (-69_444, 7));
+		assert_eq!(RefreshHzToInterval100ns(240.0), (-41_667, 4));
+		assert_eq!(RefreshHzToInterval100ns(0.0), (-166_667, 17));
+		assert_eq!(RefreshHzToInterval100ns(500.0), (-41_667, 4));
+		assert_eq!(RefreshHzToInterval100ns(10.0), (-333_333, 33));
+
+		let (Live100ns, LiveMs) = DisplayFrameInterval100ns();
+		assert!((-333_333..=-41_667).contains(&Live100ns));
+		assert!((4..=34).contains(&LiveMs));
+	}
 
 	#[test]
 	fn RimLayoutScalesMatteHairlineCleanly() {

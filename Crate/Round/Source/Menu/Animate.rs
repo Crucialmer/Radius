@@ -72,6 +72,10 @@ pub fn SpringOpen(HwndRaw:isize, TargetX:i32, StartY:i32, TargetY:i32) {
 
 			let MaxDuration = Duration::from_millis(320);
 
+			let (DueTime, FallbackMs) = crate::Overlay::Platform::Engine::DisplayFrameInterval100ns();
+
+			let WaitMs = FallbackMs.max(16);
+
 			while Generation.load(Ordering::Acquire) == Token {
 				if IsWindow(Hwnd) == 0 || IsWindowVisible(Hwnd) == 0 {
 					break;
@@ -91,16 +95,13 @@ pub fn SpringOpen(HwndRaw:isize, TargetX:i32, StartY:i32, TargetY:i32) {
 				}
 
 				if !Timer.is_null() {
-					// 4.1667 ms one-shot wait = 240 Hz pacing (negative = relative 100ns units)
-					let DueTime:i64 = -41_667;
-
 					if SetWaitableTimer(Timer, &DueTime, 0, None, std::ptr::null(), 0) != 0 {
-						WaitForSingleObject(Timer, 16);
+						WaitForSingleObject(Timer, WaitMs);
 					} else {
-						std::thread::sleep(Duration::from_millis(4));
+						std::thread::sleep(Duration::from_millis(u64::from(FallbackMs)));
 					}
 				} else {
-					std::thread::sleep(Duration::from_millis(4));
+					std::thread::sleep(Duration::from_millis(u64::from(FallbackMs)));
 				}
 
 				if Generation.load(Ordering::Acquire) != Token {
