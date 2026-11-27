@@ -3,19 +3,35 @@
 use tauri::{Runtime, WebviewWindow};
 use windows_sys::Win32::{
 	Foundation::HWND,
-	Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute},
+	Graphics::Dwm::{
+		DWMWA_BORDER_COLOR,
+		DWMWA_COLOR_NONE,
+		DWMWA_WINDOW_CORNER_PREFERENCE,
+		DWMWCP_DONOTROUND,
+		DwmSetWindowAttribute,
+	},
 	UI::WindowsAndMessaging::{
 		GWL_EXSTYLE,
+		GWL_STYLE,
 		GetWindowLongPtrW,
 		HWND_TOPMOST,
+		SWP_FRAMECHANGED,
 		SWP_NOACTIVATE,
 		SWP_NOMOVE,
 		SWP_NOSIZE,
 		SetWindowLongPtrW,
 		SetWindowPos,
+		WS_BORDER,
+		WS_CAPTION,
+		WS_DLGFRAME,
+		WS_EX_CLIENTEDGE,
+		WS_EX_DLGMODALFRAME,
 		WS_EX_NOACTIVATE,
+		WS_EX_STATICEDGE,
 		WS_EX_TOOLWINDOW,
 		WS_EX_TRANSPARENT,
+		WS_EX_WINDOWEDGE,
+		WS_THICKFRAME,
 	},
 };
 
@@ -33,31 +49,60 @@ fn handle<R:Runtime>(Window:&WebviewWindow<R>) -> Option<HWND> {
 
 impl Trait for Struct {
 	/// Above the taskbar, out of the taskbar list, out of the alt-tab cycle, and
-	/// out of the mouse's way. Tauri already made it `WS_EX_LAYERED`; the three
-	/// styles below are what a click-through overlay adds on top. Windows 11's
-	/// own corner rounding is switched off so the corners drawn by the webview
-	/// are the only ones.
+	/// out of the mouse's way. Strips any Win32 non-client frame/border bits and
+	/// suppresses Windows 11's DWM corner rounding, drop shadow, and 1px window
+	/// border so re-plugging an external monitor never leaves a rectangular border
+	/// behind the overlay corners.
 	fn Art<R:Runtime>(Window:&WebviewWindow<R>) {
+		let _ = Window.set_shadow(false);
+
 		let Some(Native) = handle(Window) else {
 			return;
 		};
 
 		unsafe {
-			let Style = GetWindowLongPtrW(Native, GWL_EXSTYLE);
+			let Style = GetWindowLongPtrW(Native, GWL_STYLE);
+
+			let FrameMask = (WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_DLGFRAME) as isize;
+
+			if (Style & FrameMask) != 0 {
+				SetWindowLongPtrW(Native, GWL_STYLE, Style & !FrameMask);
+			}
+
+			let ExStyle = GetWindowLongPtrW(Native, GWL_EXSTYLE);
+
+			let EdgeMask = (WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE) as isize;
 
 			let Extra = (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) as isize;
 
-			SetWindowLongPtrW(Native, GWL_EXSTYLE, Style | Extra);
-
-			SetWindowPos(Native, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+			SetWindowLongPtrW(Native, GWL_EXSTYLE, (ExStyle & !EdgeMask) | Extra);
 
 			let Corner:i32 = DWMWCP_DONOTROUND;
 
-			DwmSetWindowAttribute(
+			let _ = DwmSetWindowAttribute(
 				Native,
 				DWMWA_WINDOW_CORNER_PREFERENCE as u32,
 				&Corner as *const i32 as *const core::ffi::c_void,
 				std::mem::size_of::<i32>() as u32,
+			);
+
+			let NoBorder:u32 = DWMWA_COLOR_NONE;
+
+			let _ = DwmSetWindowAttribute(
+				Native,
+				DWMWA_BORDER_COLOR as u32,
+				&NoBorder as *const u32 as *const core::ffi::c_void,
+				std::mem::size_of::<u32>() as u32,
+			);
+
+			SetWindowPos(
+				Native,
+				HWND_TOPMOST,
+				0,
+				0,
+				0,
+				0,
+				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
 			);
 		}
 	}

@@ -27,6 +27,55 @@ use crate::{
 	Window::Chrome,
 };
 
+/// Snap an overlay window to exact physical monitor coordinates & dimensions
+/// while stripping DWM shadows/borders and syncing WebView2 controller bounds
+/// even across cross-DPI `WM_DPICHANGED` transitions.
+fn SnapWindow<R:Runtime>(Window:&WebviewWindow<R>, PhysicalX:i32, PhysicalY:i32, WidthPx:i32, HeightPx:i32) {
+	let Width = u32::try_from(WidthPx).unwrap_or(0);
+
+	let Height = u32::try_from(HeightPx).unwrap_or(0);
+
+	if Width == 0 || Height == 0 {
+		return;
+	}
+
+	let _ = Window.set_shadow(false);
+
+	let _ = Window.set_position(PhysicalPosition::new(PhysicalX, PhysicalY));
+
+	let _ = Window.set_size(PhysicalSize::new(Width, Height));
+
+	Platform::Art(Window);
+
+	#[cfg(target_os = "windows")]
+	if let Ok(Raw) = Window.hwnd() {
+		use windows_sys::Win32::{
+			Foundation::HWND,
+			UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SetWindowPos},
+		};
+
+		let Hwnd = Raw.0 as HWND;
+
+		if !Hwnd.is_null() {
+			unsafe {
+				SetWindowPos(
+					Hwnd,
+					HWND_TOPMOST,
+					PhysicalX,
+					PhysicalY,
+					WidthPx,
+					HeightPx,
+					SWP_NOACTIVATE | SWP_FRAMECHANGED,
+				);
+			}
+		}
+	}
+
+	// Re-apply physical size after cross-DPI `WM_DPICHANGED` has landed so Wry's
+	// WebView2 controller bounds match the exact monitor dimensions.
+	let _ = Window.set_size(PhysicalSize::new(Width, Height));
+}
+
 /// Build and position one transparent, click-through overlay window for `Screen`.
 pub fn BuildOverlay<R:Runtime>(
 	App:&AppHandle<R>,
@@ -41,10 +90,6 @@ pub fn BuildOverlay<R:Runtime>(
 	);
 
 	let InitScript = Script::Fn(Preferences, Screen);
-
-	let Width = u32::try_from(Screen.Pixels.0).unwrap_or(0);
-
-	let Height = u32::try_from(Screen.Pixels.1).unwrap_or(0);
 
 	let Builder = Chrome::Fn(
 		WebviewWindowBuilder::new(App, &Screen.Label, WebviewUrl::App("index.html".into())),
@@ -66,13 +111,7 @@ pub fn BuildOverlay<R:Runtime>(
 
 	let Window = Builder.build()?;
 
-	// Snap to exact physical monitor coordinates and dimensions to eliminate
-	// fractional-DPI rounding gaps up to 8K displays.
-	let _ = Window.set_position(PhysicalPosition::new(Screen.PhysicalX, Screen.PhysicalY));
-
-	let _ = Window.set_size(PhysicalSize::new(Width, Height));
-
-	Platform::Art(&Window);
+	SnapWindow(&Window, Screen.PhysicalX, Screen.PhysicalY, Screen.Pixels.0, Screen.Pixels.1);
 
 	let WindowVis = match PerOf::Fn(&Preferences.Visible, &Screen.Label) {
 		Visibility::Shown => Visibility::Shown,
@@ -82,7 +121,33 @@ pub fn BuildOverlay<R:Runtime>(
 
 	VisibilityApply::Fn(WindowVis, &Window)?;
 
+	// Re-verify bounds and frame suppression once shown so Windows 11 DWM never
+	// attaches a rectangular border or shadow after visibility transitions.
+	SnapWindow(&Window, Screen.PhysicalX, Screen.PhysicalY, Screen.Pixels.0, Screen.Pixels.1);
+
 	Ok(Window)
+}
+
+/// Re-snap a single live overlay window whose Win32 rect drifted from its
+/// monitor (for example due to a delayed `WM_DPICHANGED` after monitor plug-in).
+/// Must run on the main thread.
+pub fn Snap<R:Runtime>(App:&AppHandle<R>, Label:&str) {
+	let Some(Window) = App.get_webview_window(Label) else {
+		return;
+	};
+
+	let Screens = App
+		.try_state::<Registry::Struct>()
+		.map(|Held| Held.Snapshot())
+		.unwrap_or_default();
+
+	let Some(Screen) = Screens.iter().find(|Item| Item.Label == Label) else {
+		return;
+	};
+
+	SnapWindow(&Window, Screen.PhysicalX, Screen.PhysicalY, Screen.Pixels.0, Screen.Pixels.1);
+
+	Watch::Resync(App, Label);
 }
 
 /// Reconcile overlay windows, registry state, and taskbar rims with the current
@@ -117,8 +182,9 @@ pub fn Reconcile<R:Runtime>(App:&AppHandle<R>) {
 		let _ = Menu.hide();
 	}
 
-	// Hide and close orphaned overlay windows belonging to disconnected monitors
-	// so their WebView2 surfaces and stale taskbar rims cannot linger or crash.
+	// Immediately hide and destroy orphaned overlay windows belonging to
+	// disconnected monitors so their labels, HWNDs, and WebView2 surfaces are
+	// released cleanly before the monitor can be re-plugged.
 	for Window in App.webview_windows().into_values() {
 		let Label = Window.label().to_owned();
 
@@ -128,7 +194,7 @@ pub fn Reconcile<R:Runtime>(App:&AppHandle<R>) {
 
 		if !NextScreens.iter().any(|Screen| Screen.Label == Label) {
 			let _ = Window.hide();
-			let _ = Window.close();
+			let _ = Window.destroy();
 			Maximize::Invalidate(&Label);
 			Taskbar::InvalidateFrame(&Label);
 		}
@@ -137,14 +203,8 @@ pub fn Reconcile<R:Runtime>(App:&AppHandle<R>) {
 	// Reposition/resize surviving overlays to exact new physical bounds and
 	// create overlays for newly connected monitors.
 	for Screen in &NextScreens {
-		let Width = u32::try_from(Screen.Pixels.0).unwrap_or(0);
-
-		let Height = u32::try_from(Screen.Pixels.1).unwrap_or(0);
-
 		if let Some(Window) = App.get_webview_window(&Screen.Label) {
-			let _ = Window.set_position(PhysicalPosition::new(Screen.PhysicalX, Screen.PhysicalY));
-			let _ = Window.set_size(PhysicalSize::new(Width, Height));
-			Platform::Art(&Window);
+			SnapWindow(&Window, Screen.PhysicalX, Screen.PhysicalY, Screen.Pixels.0, Screen.Pixels.1);
 		} else if let Err(Error) = BuildOverlay(App, &Preferences, Screen) {
 			eprintln!("radius: overlay window {} could not be rebuilt: {Error}", Screen.Label);
 		}

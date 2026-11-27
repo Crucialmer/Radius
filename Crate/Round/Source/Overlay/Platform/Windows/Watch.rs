@@ -226,10 +226,11 @@ fn DisplaySignature() -> Vec<DisplayTuple> {
 #[cfg(target_os = "windows")]
 fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Screen::Struct::Struct]) {
 	use windows_sys::Win32::{
-		Foundation::HWND,
+		Foundation::{HWND, RECT},
 		UI::WindowsAndMessaging::{
 			GW_HWNDPREV,
 			GetWindow,
+			GetWindowRect,
 			HWND_TOPMOST,
 			IsWindow,
 			IsWindowVisible,
@@ -241,10 +242,6 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 	};
 
 	let Taskbars = Taskbar::FindVisible();
-
-	if Taskbars.is_empty() {
-		return;
-	}
 
 	let Windows = App.webview_windows();
 
@@ -258,9 +255,9 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 		}
 
 		// Skip orphaned windows whose monitor has already been removed.
-		if !Screens.iter().any(|Screen| Screen.Label == Label) {
+		let Some(Screen) = Screens.iter().find(|Item| Item.Label == Label) else {
 			continue;
-		}
+		};
 
 		let Ok(Raw) = Window.hwnd() else {
 			continue;
@@ -274,6 +271,34 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 
 		unsafe {
 			if IsWindow(OverlayHwnd) == 0 || IsWindowVisible(OverlayHwnd) == 0 {
+				continue;
+			}
+
+			// Self-heal if a cross-DPI `WM_DPICHANGED` transition silently shifted or
+			// resized this overlay away from its monitor's exact physical bounds.
+			let mut WinRect = RECT { left:0, top:0, right:0, bottom:0 };
+
+			if GetWindowRect(OverlayHwnd, &mut WinRect) != 0 {
+				let CurW = WinRect.right - WinRect.left;
+
+				let CurH = WinRect.bottom - WinRect.top;
+
+				if (WinRect.left - Screen.PhysicalX).abs() > 2
+					|| (WinRect.top - Screen.PhysicalY).abs() > 2
+					|| (CurW - Screen.Pixels.0).abs() > 2
+					|| (CurH - Screen.Pixels.1).abs() > 2
+				{
+					let SnapApp = App.clone();
+
+					let SnapLabel = Label.to_owned();
+
+					let _ = App.run_on_main_thread(move || {
+						OverlaySync::Snap(&SnapApp, &SnapLabel);
+					});
+				}
+			}
+
+			if Taskbars.is_empty() {
 				continue;
 			}
 
@@ -426,9 +451,9 @@ fn RunMessageLoop() {
 					Callback();
 				}
 
-				// Follow up for ~720 ms so Explorer finishing taskbar relocation
-				// after `WM_DISPLAYCHANGE` is caught cleanly.
-				BurstTicks.store(6, Ordering::Release);
+				// Follow up for ~2.4 s so delayed Explorer taskbar creation and
+				// secondary EDID/DPI settlement after `WM_DISPLAYCHANGE` are caught.
+				BurstTicks.store(20, Ordering::Release);
 				IdleTicks.store(0, Ordering::Release);
 			}
 
@@ -439,6 +464,21 @@ fn RunMessageLoop() {
 
 		let ShouldRun = if Remaining > 0 {
 			BurstTicks.store(Remaining - 1, Ordering::Release);
+
+			if Remaining == 1 {
+				let Sig = DisplaySignature();
+
+				let Changed = {
+					let Guard = LastDisplaySig.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+					!Sig.is_empty() && Guard.as_ref() != Some(&Sig)
+				};
+
+				if Changed {
+					ScheduleReconcile();
+					return;
+				}
+			}
+
 			NeedsZOrder.store(true, Ordering::Release);
 			NeedsMaximize.store(true, Ordering::Release);
 			NeedsTaskbar.store(true, Ordering::Release);

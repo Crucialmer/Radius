@@ -215,12 +215,10 @@ pub fn Refresh<R:Runtime>(
 	let mut Drifted = false;
 
 	for Item in Screens {
-		let Some((MonRect, WorkRect)) = Taskbar::MonitorRects(Item) else {
+		let Some((MonRect, WorkRect, Scale)) = Taskbar::MonitorRects(Item) else {
 			Drifted = true;
 			continue;
 		};
-
-		let Scale = Taskbar::LiveScale(App, Item);
 
 		let MonW = (MonRect.right - MonRect.left).max(1);
 

@@ -4,6 +4,17 @@
 
 ---
 
+## 1.1.4
+
+### 修复
+
+- **修复重新插入外接屏幕后圆角异常、圆角阴影后面出现矩形边框的 Bug**：
+  - 强化覆盖层窗口样式净化（[Struct.rs](Crate/Round/Source/Overlay/Platform/Windows/Struct.rs)）：强制关闭阴影（`set_shadow(false)`）、清除非客户区边框标志（`WS_BORDER` / `WS_THICKFRAME` / `WS_CAPTION` / `WS_EX_WINDOWEDGE` 等）、显式设置 Windows 11 `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE` 与 `DWMWCP_DONOTROUND` 并通过 `SWP_FRAMECHANGED` 立即刷新，彻底消除外接屏重插后 DWM 残留的矩形边框与阴影。
+  - 严格校验任务栏裁切区域类型与边界（[Taskbar.rs](Crate/Round/Source/Overlay/Platform/Windows/Taskbar.rs)）：必须为 `COMPLEXREGION` 且与当前可视矩形一致，避免外接屏重插时资源管理器将任务栏重置为矩形 `SIMPLEREGION` 后从玻璃圆角阴影背后露出直角矩形框。
+  - 直接通过 `GetDpiForMonitor` 按显示器读取精确 DPI（不再受新窗口跨 DPI 启动瞬间缩放漂移影响），并在 `SnapWindow` 及监控巡检中自动校准因 `WM_DPICHANGED` 偏移/缩放的覆盖层窗口与 WebView2 视图尺寸，将热插拔后跟踪窗口延长至 2.4 秒并立即销毁已拔出屏幕的旧窗口（`destroy()`）。
+
+---
+
 ## 1.1.3
 
 ### 修复

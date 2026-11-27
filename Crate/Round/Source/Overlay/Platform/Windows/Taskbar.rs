@@ -5,7 +5,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
 	Message::{Enum::Enum as Message, Payload::Struct as Payload},
@@ -81,37 +81,6 @@ const SecondaryClass:[u16; 23] = EncodeWide(b"Shell_SecondaryTrayWnd\0");
 #[cfg(target_os = "windows")]
 const BridgeClass:[u16; 50] = EncodeWide(b"Windows.UI.Composition.DesktopWindowContentBridge\0");
 
-/// Read the live scale factor for one monitor's overlay window directly via Win32
-/// `GetDpiForWindow` (avoiding cross-thread Tauri/Tao calls during display hotplugs),
-/// falling back to the reconciled `ScreenItem.ScaleFactor`.
-#[cfg(target_os = "windows")]
-pub fn LiveScale<R:Runtime>(App:&AppHandle<R>, ScreenItem:&Screen) -> f64 {
-	use windows_sys::Win32::{
-		Foundation::HWND,
-		UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::IsWindow},
-	};
-
-	if let Some(Window) = App.get_webview_window(ScreenItem.Label.as_str())
-		&& let Ok(Raw) = Window.hwnd()
-	{
-		let Hwnd = Raw.0 as HWND;
-
-		if !Hwnd.is_null() && unsafe { IsWindow(Hwnd) } != 0 {
-			let Dpi = unsafe { GetDpiForWindow(Hwnd) };
-
-			if Dpi >= 96 {
-				return (f64::from(Dpi) / 96.0).max(1.0);
-			}
-		}
-	}
-
-	ScreenItem.ScaleFactor.max(1.0)
-}
-
-/// Non-Windows fallback.
-#[cfg(not(target_os = "windows"))]
-pub fn LiveScale<R:Runtime>(_App:&AppHandle<R>, ScreenItem:&Screen) -> f64 { ScreenItem.ScaleFactor.max(1.0) }
-
 /// Clear the cached rim frame for one monitor so the next sync re-emits its
 /// current geometry (used when an overlay finishes mounting or is removed).
 pub fn InvalidateFrame(Label:&str) {
@@ -135,16 +104,18 @@ pub fn InvalidateAll() {
 	}
 }
 
-/// Query live physical `(rcMonitor, rcWork)` for `ScreenItem` using
-/// `MONITOR_DEFAULTTONULL` so a disconnected external monitor returns `None`
-/// instead of silently aliasing onto the surviving laptop display.
+/// Query live physical `(rcMonitor, rcWork, ScaleFactor)` for `ScreenItem` using
+/// `MONITOR_DEFAULTTONULL` and `GetDpiForMonitor` so a disconnected external
+/// monitor returns `None` instead of aliasing onto the surviving display, and
+/// per-monitor DPI is always exact even during cross-DPI window creation.
 #[cfg(target_os = "windows")]
 pub fn MonitorRects(
 	ScreenItem:&Screen,
-) -> Option<(windows_sys::Win32::Foundation::RECT, windows_sys::Win32::Foundation::RECT)> {
+) -> Option<(windows_sys::Win32::Foundation::RECT, windows_sys::Win32::Foundation::RECT, f64)> {
 	use windows_sys::Win32::{
 		Foundation::POINT,
 		Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromPoint},
+		UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
 	};
 
 	let Center = POINT {
@@ -183,7 +154,17 @@ pub fn MonitorRects(
 			return None;
 		}
 
-		Some((Info.rcMonitor, Info.rcWork))
+		let mut DpiX:u32 = 96;
+
+		let mut DpiY:u32 = 96;
+
+		let Scale = if GetDpiForMonitor(Hmon, MDT_EFFECTIVE_DPI, &mut DpiX, &mut DpiY) == 0 && DpiX >= 96 {
+			(f64::from(DpiX) / 96.0).max(1.0)
+		} else {
+			ScreenItem.ScaleFactor.max(1.0)
+		};
+
+		Some((Info.rcMonitor, Info.rcWork, Scale))
 	}
 }
 
@@ -454,9 +435,7 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 		return Frame::default();
 	}
 
-	let Scale = ScreenItem.ScaleFactor.max(1.0);
-
-	let Some((MonRect, WorkRect)) = MonitorRects(ScreenItem) else {
+	let Some((MonRect, WorkRect, Scale)) = MonitorRects(ScreenItem) else {
 		return Frame::default();
 	};
 
@@ -505,7 +484,7 @@ pub fn Apply<R:Runtime>(
 
 	use windows_sys::Win32::{
 		Foundation::RECT,
-		Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, ERROR, GetWindowRgnBox, NULLREGION, SetWindowRgn},
+		Graphics::Gdi::{COMPLEXREGION, CreateRoundRectRgn, DeleteObject, GetWindowRgnBox, SetWindowRgn},
 		UI::WindowsAndMessaging::GetWindowRect,
 	};
 
@@ -522,9 +501,9 @@ pub fn Apply<R:Runtime>(
 	let MonitorInfo:Vec<(&Screen, RECT, RECT, f64)> = Screens
 		.iter()
 		.filter_map(|Item| {
-			let (MonRect, WorkRect) = MonitorRects(Item)?;
+			let (MonRect, WorkRect, Scale) = MonitorRects(Item)?;
 
-			Some((Item, MonRect, WorkRect, LiveScale(App, Item)))
+			Some((Item, MonRect, WorkRect, Scale))
 		})
 		.collect();
 
@@ -553,22 +532,21 @@ pub fn Apply<R:Runtime>(
 
 		let CenterY = Raw.top + RawH / 2;
 
-		let Matched = MonitorInfo.iter().find(|(_, MonRect, ..)| {
+		let Some(&(Item, MonRect, WorkRect, Scale)) = MonitorInfo.iter().find(|(_, MonRect, ..)| {
 			CenterX >= MonRect.left && CenterX < MonRect.right && CenterY >= MonRect.top && CenterY < MonRect.bottom
-		});
-
-		let (Vis, Scale, MatchedScreen, MonRect) = if let Some(&(Item, MonRect, WorkRect, Scale)) = Matched {
-			let MaxBottom = Reports.get(&Item.Label).and_then(|Report| Report.MaxBottom);
-
-			let Some((RawBox, VisBox)) = MeasureBounds(Hwnd, &MonRect, &WorkRect, MaxBottom, Scale) else {
-				continue;
-			};
-
-			Raw = RawBox;
-			(VisBox, Scale, Some(Item), MonRect)
-		} else {
-			(Raw, 1.0, None, Raw)
+		}) else {
+			// Taskbar belongs to a monitor not yet reconciled into `Screens`; wait
+			// for `Reconcile` rather than clipping at a guessed 1.0 DPI scale.
+			continue;
 		};
+
+		let MaxBottom = Reports.get(&Item.Label).and_then(|Report| Report.MaxBottom);
+
+		let Some((RawBox, Vis)) = MeasureBounds(Hwnd, &MonRect, &WorkRect, MaxBottom, Scale) else {
+			continue;
+		};
+
+		Raw = RawBox;
 
 		let Width = Vis.right - Vis.left;
 
@@ -588,7 +566,10 @@ pub fn Apply<R:Runtime>(
 
 		let Cached = Guard.contains(&Entry);
 
-		// Verify Explorer or a DPI transition has not silently cleared our region.
+		// A rounded-rect region always reports `COMPLEXREGION` whose bounding box
+		// matches our clip rect. Checking strictly catches Windows/Explorer
+		// resetting a taskbar back to a rectangular `SIMPLEREGION` or wrong size
+		// when an external monitor is re-plugged.
 		let RegionActive = if Diameter == 0 {
 			true
 		} else {
@@ -596,7 +577,11 @@ pub fn Apply<R:Runtime>(
 
 			let Kind = unsafe { GetWindowRgnBox(Hwnd, &mut BoxRect) };
 
-			Kind != ERROR && Kind != NULLREGION
+			Kind == COMPLEXREGION
+				&& (BoxRect.left - OffsetX).abs() <= 1
+				&& (BoxRect.top - OffsetY).abs() <= 1
+				&& (BoxRect.right - (OffsetX + Width)).abs() <= 1
+				&& (BoxRect.bottom - (OffsetY + Height)).abs() <= 1
 		};
 
 		if !Cached || !RegionActive {
@@ -622,27 +607,25 @@ pub fn Apply<R:Runtime>(
 
 		NextCache.push(Entry);
 
-		if let Some(Item) = MatchedScreen {
-			let Covered = Reports.get(&Item.Label).is_some_and(|Report| Report.Fullscreen);
+		let Covered = Reports.get(&Item.Label).is_some_and(|Report| Report.Fullscreen);
 
-			let Edge = if Covered { "none" } else { DetectEdge(&Vis, &MonRect) };
+		let Edge = if Covered { "none" } else { DetectEdge(&Vis, &MonRect) };
 
-			let Visible = Clamped > 0 && !Covered;
+		let Visible = Clamped > 0 && !Covered;
 
-			NextFrames.insert(
-				Item.Label.clone(),
-				FrameKey {
-					Visible,
-					Edge,
-					Left:Vis.left - MonRect.left,
-					Top:Vis.top - MonRect.top,
-					Width,
-					Height,
-					Radius:Clamped,
-					ScaleMilli:(Scale * 1000.0).round() as i32,
-				},
-			);
-		}
+		NextFrames.insert(
+			Item.Label.clone(),
+			FrameKey {
+				Visible,
+				Edge,
+				Left:Vis.left - MonRect.left,
+				Top:Vis.top - MonRect.top,
+				Width,
+				Height,
+				Radius:Clamped,
+				ScaleMilli:(Scale * 1000.0).round() as i32,
+			},
+		);
 	}
 
 	*Guard = NextCache;
@@ -676,7 +659,7 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 			continue;
 		}
 
-		let Scale = LiveScale(App, Item);
+		let Scale = (f64::from(Target.ScaleMilli) / 1000.0).max(1.0);
 
 		let _ = App.emit_to(
 			Item.Label.as_str(),
