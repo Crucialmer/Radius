@@ -553,6 +553,152 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 #[cfg(not(target_os = "windows"))]
 pub fn InitialFrame(_ScreenItem:&Screen, _Enabled:bool, _TaskbarRadius:Radius) -> Frame { Frame::default() }
 
+/// Compute analytic scanline rectangles in `(OffsetX, OffsetY)..(OffsetX + Width, OffsetY + Height)`
+/// matching Direct2D's pixel-center rounded-rect arc (`(R - (y + 0.5))` / `R`) within <= 0.5 px,
+/// coalescing consecutive rows that share the same horizontal inset.
+#[cfg(target_os = "windows")]
+fn BuildAnalyticRoundRectRects(
+	OffsetX:i32,
+	OffsetY:i32,
+	Width:i32,
+	Height:i32,
+	Radius:i32,
+) -> Vec<windows_sys::Win32::Foundation::RECT> {
+	use windows_sys::Win32::Foundation::RECT;
+
+	if Width <= 0 || Height <= 0 {
+		return Vec::new();
+	}
+
+	let R = Radius.clamp(0, (Width / 2).min(Height / 2));
+
+	if R <= 0 {
+		return vec![RECT { left:OffsetX, top:OffsetY, right:OffsetX + Width, bottom:OffsetY + Height }];
+	}
+
+	let RowInset = |K:i32| -> i32 {
+		let Rf = f64::from(R);
+
+		let Dy = Rf - (f64::from(K) + 0.5);
+
+		let D2dX = Rf - (Rf * Rf - Dy * Dy).max(0.0).sqrt();
+
+		let MaxInset = ((Width - 1) / 2).max(0);
+
+		((D2dX - 0.5).ceil().max(0.0) as i32).min(MaxInset)
+	};
+
+	let mut Rects:Vec<RECT> = Vec::with_capacity((R as usize) * 2 + 1);
+
+	let mut PushBand = |Top:i32, Bottom:i32, Inset:i32| {
+		if Bottom <= Top {
+			return;
+		}
+
+		let Left = OffsetX + Inset;
+
+		let Right = OffsetX + Width - Inset;
+
+		if Right <= Left {
+			return;
+		}
+
+		if let Some(Last) = Rects.last_mut()
+			&& Last.bottom == Top
+			&& Last.left == Left
+			&& Last.right == Right
+		{
+			Last.bottom = Bottom;
+		} else {
+			Rects.push(RECT { left:Left, top:Top, right:Right, bottom:Bottom });
+		}
+	};
+
+	for K in 0..R {
+		let Y = OffsetY + K;
+
+		PushBand(Y, Y + 1, RowInset(K));
+	}
+
+	PushBand(OffsetY + R, OffsetY + Height - R, 0);
+
+	for K in (0..R).rev() {
+		let Y = OffsetY + Height - 1 - K;
+
+		PushBand(Y, Y + 1, RowInset(K));
+	}
+
+	Rects
+}
+
+/// Create a Win32 clipping `HRGN` from analytic pixel-center scanlines via `ExtCreateRegion`,
+/// eliminating GDI `CreateRoundRectRgn`'s +1..3px inward corner bias relative to Direct2D.
+#[cfg(target_os = "windows")]
+fn CreateAnalyticRoundRectRgn(
+	OffsetX:i32,
+	OffsetY:i32,
+	Width:i32,
+	Height:i32,
+	Radius:i32,
+) -> windows_sys::Win32::Graphics::Gdi::HRGN {
+	use std::{mem::size_of, ptr};
+
+	use windows_sys::Win32::{
+		Foundation::RECT,
+		Graphics::Gdi::{CreateRoundRectRgn, ExtCreateRegion, RDH_RECTANGLES, RGNDATA, RGNDATAHEADER},
+	};
+
+	let Rects = BuildAnalyticRoundRectRects(OffsetX, OffsetY, Width, Height, Radius);
+
+	if !Rects.is_empty() {
+		let mut Bound = Rects[0];
+
+		for Item in &Rects[1..] {
+			Bound.left = Bound.left.min(Item.left);
+			Bound.top = Bound.top.min(Item.top);
+			Bound.right = Bound.right.max(Item.right);
+			Bound.bottom = Bound.bottom.max(Item.bottom);
+		}
+
+		let HeaderSize = size_of::<RGNDATAHEADER>();
+
+		let RectsSize = Rects.len() * size_of::<RECT>();
+
+		let TotalBytes = HeaderSize + RectsSize;
+
+		let Words = TotalBytes.div_ceil(size_of::<u32>());
+
+		let mut Buf = vec![0u32; Words];
+
+		let Header = RGNDATAHEADER {
+			dwSize:HeaderSize as u32,
+			iType:RDH_RECTANGLES,
+			nCount:Rects.len() as u32,
+			nRgnSize:RectsSize as u32,
+			rcBound:Bound,
+		};
+
+		unsafe {
+			ptr::write_unaligned(Buf.as_mut_ptr() as *mut RGNDATAHEADER, Header);
+			ptr::copy_nonoverlapping(
+				Rects.as_ptr(),
+				(Buf.as_mut_ptr() as *mut u8).add(HeaderSize) as *mut RECT,
+				Rects.len(),
+			);
+
+			let Rgn = ExtCreateRegion(ptr::null(), TotalBytes as u32, Buf.as_ptr() as *const RGNDATA);
+
+			if !Rgn.is_null() {
+				return Rgn;
+			}
+		}
+	}
+
+	let Diameter = Radius.max(0) * 2;
+
+	unsafe { CreateRoundRectRgn(OffsetX, OffsetY, OffsetX + Width + 1, OffsetY + Height + 1, Diameter, Diameter) }
+}
+
 /// Apply 4-corner rounded rectangle clipping to every Windows taskbar and sync
 /// each monitor's anti-aliased Liquid Glass rim and independent edge status.
 #[cfg(target_os = "windows")]
@@ -567,7 +713,7 @@ pub fn Apply<R:Runtime>(
 
 	use windows_sys::Win32::{
 		Foundation::RECT,
-		Graphics::Gdi::{COMPLEXREGION, CreateRoundRectRgn, DeleteObject, GetWindowRgnBox, SetWindowRgn},
+		Graphics::Gdi::{COMPLEXREGION, DeleteObject, GetWindowRgnBox, SIMPLEREGION, SetWindowRgn},
 		UI::WindowsAndMessaging::GetWindowRect,
 	};
 
@@ -649,18 +795,21 @@ pub fn Apply<R:Runtime>(
 
 		let Cached = Guard.contains(&Entry);
 
-		// A rounded-rect region always reports `COMPLEXREGION` whose bounding box
-		// matches our clip rect. Checking strictly catches Windows/Explorer
-		// resetting a taskbar back to a rectangular `SIMPLEREGION` or wrong size
-		// when an external monitor is re-plugged.
-		let RegionActive = if Diameter == 0 {
+		// An analytic rounded-rect region with `Clamped >= 2` produces `COMPLEXREGION`
+		// (whereas `Clamped <= 1` collapses to `SIMPLEREGION`) matching our clip bounds.
+		// Checking strictly catches Windows/Explorer resetting a taskbar back to a
+		// full rectangle when an external monitor is re-plugged.
+		let RegionActive = if Clamped == 0 {
 			true
 		} else {
 			let mut BoxRect = RECT { left:0, top:0, right:0, bottom:0 };
 
 			let Kind = unsafe { GetWindowRgnBox(Hwnd, &mut BoxRect) };
 
-			Kind == COMPLEXREGION
+			let KindMatches =
+				if Clamped >= 2 { Kind == COMPLEXREGION } else { Kind == SIMPLEREGION || Kind == COMPLEXREGION };
+
+			KindMatches
 				&& (BoxRect.left - OffsetX).abs() <= 1
 				&& (BoxRect.top - OffsetY).abs() <= 1
 				&& (BoxRect.right - (OffsetX + Width)).abs() <= 1
@@ -669,17 +818,10 @@ pub fn Apply<R:Runtime>(
 
 		if !Cached || !RegionActive {
 			unsafe {
-				if Diameter == 0 {
+				if Clamped == 0 {
 					let _ = SetWindowRgn(Hwnd, ptr::null_mut(), 1);
 				} else {
-					let Region = CreateRoundRectRgn(
-						OffsetX,
-						OffsetY,
-						OffsetX + Width + 1,
-						OffsetY + Height + 1,
-						Diameter,
-						Diameter,
-					);
+					let Region = CreateAnalyticRoundRectRgn(OffsetX, OffsetY, Width, Height, Clamped);
 
 					if !Region.is_null() && SetWindowRgn(Hwnd, Region, 1) == 0 {
 						DeleteObject(Region);
@@ -808,3 +950,89 @@ pub fn Apply<R:Runtime>(
 /// Non-Windows fallback.
 #[cfg(not(target_os = "windows"))]
 pub fn Restore() {}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+	use windows_sys::Win32::{
+		Foundation::RECT,
+		Graphics::Gdi::{COMPLEXREGION, DeleteObject, GetRgnBox, PtInRegion},
+	};
+
+	use super::{BuildAnalyticRoundRectRects, CreateAnalyticRoundRectRgn};
+
+	fn AssertAnalyticRectsMatchCircle(OffsetX:i32, OffsetY:i32, Width:i32, Height:i32, Radius:i32) {
+		let Rects = BuildAnalyticRoundRectRects(OffsetX, OffsetY, Width, Height, Radius);
+		assert!(!Rects.is_empty());
+		assert_eq!(Rects.first().unwrap().top, OffsetY);
+		assert_eq!(Rects.last().unwrap().bottom, OffsetY + Height);
+
+		let R = Radius.clamp(0, (Width / 2).min(Height / 2));
+
+		for Window in Rects.windows(2) {
+			assert_eq!(Window[0].bottom, Window[1].top, "scanline bands must be strictly contiguous");
+			assert!(Window[0].top < Window[0].bottom);
+		}
+
+		for Band in &Rects {
+			assert!(Band.left < Band.right);
+			let LeftInset = Band.left - OffsetX;
+			let RightInset = (OffsetX + Width) - Band.right;
+			assert_eq!(LeftInset, RightInset, "scanline band must be left/right symmetric");
+
+			for Y in Band.top..Band.bottom {
+				let LocalY = Y - OffsetY;
+				let K = if LocalY < R {
+					Some(LocalY)
+				} else if LocalY >= Height - R {
+					Some(Height - 1 - LocalY)
+				} else {
+					None
+				};
+
+				if let Some(KVal) = K {
+					let Rf = f64::from(R);
+					let Dy = Rf - (f64::from(KVal) + 0.5);
+					let AnalyticX = Rf - (Rf * Rf - Dy * Dy).max(0.0).sqrt();
+					let Diff = (f64::from(LeftInset) - AnalyticX).abs();
+					assert!(
+						Diff <= 0.501,
+						"row y={LocalY} inset={LeftInset} diverged from analytic {AnalyticX:.3} by {Diff:.3}"
+					);
+				} else {
+					assert_eq!(LeftInset, 0, "straight body row y={LocalY} must have 0 inset");
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn AnalyticRoundRectScanlinesAreExactAndSymmetric() {
+		AssertAnalyticRectsMatchCircle(0, 0, 3840, 64, 16);
+		AssertAnalyticRectsMatchCircle(4, 2, 3840, 42, 12);
+		AssertAnalyticRectsMatchCircle(0, 0, 200, 40, 20);
+	}
+
+	#[test]
+	fn AnalyticRegionCreationProducesComplexRegionWithExactBounds() {
+		for (Ox, Oy, W, H, R) in [(0, 0, 3840, 64, 16), (0, 2, 3840, 42, 12), (0, 0, 200, 40, 20)] {
+			let Rgn = CreateAnalyticRoundRectRgn(Ox, Oy, W, H, R);
+			assert!(!Rgn.is_null(), "ExtCreateRegion returned null");
+
+			let mut BoxRect = RECT { left:0, top:0, right:0, bottom:0 };
+			let Kind = unsafe { GetRgnBox(Rgn, &mut BoxRect) };
+			assert_eq!(Kind, COMPLEXREGION);
+			assert_eq!(
+				(BoxRect.left, BoxRect.top, BoxRect.right, BoxRect.bottom),
+				(Ox, Oy, Ox + W, Oy + H)
+			);
+
+			// Top-left pixel outside corner must be excluded; middle interior pixel must be included.
+			assert_eq!(unsafe { PtInRegion(Rgn, Ox, Oy) }, 0);
+			assert_ne!(unsafe { PtInRegion(Rgn, Ox + W / 2, Oy + H / 2) }, 0);
+
+			unsafe {
+				DeleteObject(Rgn);
+			}
+		}
+	}
+}
