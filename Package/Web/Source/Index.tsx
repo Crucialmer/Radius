@@ -47,24 +47,33 @@ function Overlay() {
 	/** Whether a maximized window is currently visible on this monitor. */
 	const [Maximized, setMaximized] = createSignal(Boolean(window.settings.maximized));
 
-	/** Logical pixel insets between the monitor rect and the work area. */
+	/** Exact physical pixel work-area insets relative to this overlay window. */
 	const [WorkInset, setWorkInset] = createSignal({
-		Left: window.settings.workLeft ?? 0,
-		Right: window.settings.workRight ?? 0,
-		Bottom: window.settings.workBottom ?? 0,
+		LeftPx: window.settings.workLeftPx ?? 0,
+		RightPx: window.settings.workRightPx ?? 0,
+		BottomPx: window.settings.workBottomPx ?? 0,
 	});
+
+	/** Exact physical overlay client dimensions (avoids Chromium integer-DIP `100vh` overshoot). */
+	const [OverlaySize, setOverlaySize] = createSignal({
+		Width: window.settings.overlayW ?? 0,
+		Height: window.settings.overlayH ?? 0,
+	});
+
+	/** Live WebView2 devicePixelRatio for exact `(physicalPx / dpr) * dpr === physicalPx` mapping. */
+	const [Dpr, setDpr] = createSignal(window.devicePixelRatio || 1);
 
 	/** Independent taskbar rim frame and occupied edge pushed by the Windows watcher. */
 	const [Taskbar, setTaskbar] = createSignal<TaskbarFrame>(
 		window.settings.taskbarFrame ?? {
 			Visible: false,
 			Edge: "none",
-			LeftPct: 0,
-			TopPct: 0,
-			WidthPct: 0,
-			HeightPct: 0,
+			LeftPx: 0,
+			TopPx: 0,
 			WidthPx: 0,
 			HeightPx: 0,
+			OverlayW: window.settings.overlayW ?? 0,
+			OverlayH: window.settings.overlayH ?? 0,
 			RadiusPx: 0,
 			Scale: 1,
 		},
@@ -85,14 +94,12 @@ function Overlay() {
 	const ShowScreenCorners = () => ScreenVisible() && Radius() > 0;
 
 	const ShowMaxCorners = () =>
-		ScreenVisible() && Radius() > 0 && MaximizeCorners() && Maximized() && WorkInset().Bottom > 0.1;
+		ScreenVisible() && Radius() > 0 && MaximizeCorners() && Maximized() && WorkInset().BottomPx > 1;
 
 	const ShowTaskbarRim = () =>
 		Taskbar().Visible && Taskbar().RadiusPx > 0 && Taskbar().WidthPx > 2 && Taskbar().HeightPx > 2;
 
 	onMount(() => {
-		void Current.setIgnoreCursorEvents(true);
-
 		const Target = { target: Current.label };
 
 		let Disposed = false;
@@ -122,8 +129,20 @@ function Overlay() {
 			setMaximizeCorners(payload.message.MaximizeCorners),
 		);
 		Register<MaximizedMessage>("maximized", (payload) => setMaximized(payload.message.Maximized));
-		Register<WorkInsetMessage>("work_inset", (payload) => setWorkInset(payload.message.WorkInset));
-		Register<TaskbarFrameMessage>("taskbar_frame", (payload) => setTaskbar(payload.message.TaskbarFrame));
+		Register<WorkInsetMessage>("work_inset", (payload) => {
+			const Inset = payload.message.WorkInset;
+			setWorkInset({ LeftPx: Inset.LeftPx, RightPx: Inset.RightPx, BottomPx: Inset.BottomPx });
+			if (Inset.OverlayW > 0 && Inset.OverlayH > 0) {
+				setOverlaySize({ Width: Inset.OverlayW, Height: Inset.OverlayH });
+			}
+		});
+		Register<TaskbarFrameMessage>("taskbar_frame", (payload) => {
+			const Frame = payload.message.TaskbarFrame;
+			setTaskbar(Frame);
+			if (Frame.OverlayW > 0 && Frame.OverlayH > 0) {
+				setOverlaySize({ Width: Frame.OverlayW, Height: Frame.OverlayH });
+			}
+		});
 
 		void Promise.all(Ready).then(() => {
 			if (!Disposed) {
@@ -133,13 +152,35 @@ function Overlay() {
 
 		let ResizeTimer: number | undefined;
 
+		let RemoveDprWatch: (() => void) | undefined;
+
+		const WatchDpr = () => {
+			RemoveDprWatch?.();
+			const CurrentDpr = window.devicePixelRatio || 1;
+			setDpr(CurrentDpr);
+			const Media = window.matchMedia(`(resolution: ${CurrentDpr}dppx)`);
+			const OnChange = () => {
+				if (!Disposed) {
+					WatchDpr();
+					void invoke("overlay_ready");
+				}
+			};
+			Media.addEventListener("change", OnChange, { once: true });
+			RemoveDprWatch = () => Media.removeEventListener("change", OnChange);
+		};
+
+		WatchDpr();
+
 		const OnResize = () => {
+			setDpr(window.devicePixelRatio || 1);
+
 			if (ResizeTimer !== undefined) {
 				window.clearTimeout(ResizeTimer);
 			}
 
 			ResizeTimer = window.setTimeout(() => {
 				if (!Disposed) {
+					setDpr(window.devicePixelRatio || 1);
 					void invoke("overlay_ready");
 				}
 			}, 150);
@@ -149,6 +190,7 @@ function Overlay() {
 
 		onCleanup(() => {
 			Disposed = true;
+			RemoveDprWatch?.();
 			if (ResizeTimer !== undefined) {
 				window.clearTimeout(ResizeTimer);
 			}
@@ -157,13 +199,22 @@ function Overlay() {
 		});
 	});
 
+	const WindowStyle = () => {
+		const Scale = Math.max(0.5, Dpr());
+		const Box = OverlaySize();
+		const WidthStyle = Box.Width > 0 ? `width: ${Box.Width / Scale}px;` : "width: 100vw;";
+		const HeightStyle = Box.Height > 0 ? `height: ${Box.Height / Scale}px;` : "height: 100vh;";
+
+		return `${WidthStyle} ${HeightStyle} --Corner: ${Radius()}px; --WorkLeft: ${WorkInset().LeftPx / Scale}px; --WorkRight: ${WorkInset().RightPx / Scale}px; --WorkBottom: ${WorkInset().BottomPx / Scale}px`;
+	};
+
 	return (
 		<div
 			class="Window"
 			data-label={Current.label}
 			data-mode={Mode()}
 			data-max-corners={ShowMaxCorners() ? "true" : "false"}
-			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}vw; --WorkRight: ${WorkInset().Right}vw; --WorkBottom: ${WorkInset().Bottom}vh`}>
+			style={WindowStyle()}>
 			<Show when={ShowScreenCorners()}>
 				<For each={ActiveScreenCorners()}>{(corner) => <Corner id={corner} />}</For>
 			</Show>
@@ -172,14 +223,13 @@ function Overlay() {
 			</Show>
 			<Show when={ShowTaskbarRim()}>
 				<TaskbarRim
-					leftPct={Taskbar().LeftPct}
-					topPct={Taskbar().TopPct}
-					widthPct={Taskbar().WidthPct}
-					heightPct={Taskbar().HeightPct}
+					leftPx={Taskbar().LeftPx}
+					topPx={Taskbar().TopPx}
 					widthPx={Taskbar().WidthPx}
 					heightPx={Taskbar().HeightPx}
 					radiusPx={Taskbar().RadiusPx}
 					scale={Taskbar().Scale}
+					dpr={Dpr()}
 				/>
 			</Show>
 		</div>

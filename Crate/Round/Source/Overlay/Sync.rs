@@ -111,6 +111,10 @@ pub fn BuildOverlay<R:Runtime>(
 
 	let Window = Builder.build()?;
 
+	// Enable click-through before `Platform::Art` so Tao's `WindowState::apply_diff`
+	// never later overwrites our cleaned Win32 frameless/tool-window styles.
+	let _ = Window.set_ignore_cursor_events(true);
+
 	SnapWindow(&Window, Screen.PhysicalX, Screen.PhysicalY, Screen.Pixels.0, Screen.Pixels.1);
 
 	let WindowVis = match PerOf::Fn(&Preferences.Visible, &Screen.Label) {

@@ -9,20 +9,20 @@ export type Mode = "dark" | "light";
 export type TaskbarEdge = "none" | "bottom" | "top" | "left" | "right";
 
 /**
- * Anti-aliased taskbar overlay frame in DPI-independent viewport percentages
- * (`LeftPct/TopPct/WidthPct/HeightPct`) paired with exact physical pixel
- * geometry (`WidthPx/HeightPx/RadiusPx`) so the SVG rim stays locked 1:1 to
- * the Win32 `CreateRoundRectRgn` clip across all DPIs, text scales, and hotplugs.
+ * Exact physical-pixel taskbar overlay frame relative to the overlay client
+ * viewport. Dividing physical pixels by WebView2's own live `devicePixelRatio`
+ * eliminates Chromium's integer-DIP `100vh` / `%` rounding drift on fractional
+ * and custom Windows DPI scales (e.g. 110%, 131 DPI / 136%, 175%) across 1080p–8K.
  */
 export type TaskbarFrame = {
 	Visible: boolean;
 	Edge?: TaskbarEdge;
-	LeftPct: number;
-	TopPct: number;
-	WidthPct: number;
-	HeightPct: number;
+	LeftPx: number;
+	TopPx: number;
 	WidthPx: number;
 	HeightPx: number;
+	OverlayW: number;
+	OverlayH: number;
 	RadiusPx: number;
 	Scale: number;
 };
@@ -39,11 +39,15 @@ export type Settings = {
 
 	maximized: boolean;
 
-	workLeft: number;
+	overlayW?: number;
 
-	workRight: number;
+	overlayH?: number;
 
-	workBottom: number;
+	workLeftPx: number;
+
+	workRightPx: number;
+
+	workBottomPx: number;
 
 	taskbarFrame?: TaskbarFrame;
 };
@@ -73,9 +77,17 @@ export type MaximizedMessage = {
 	message: { Maximized: boolean };
 };
 
-/** `listen("work_inset", ...)` payload: `Message::WorkInset` (viewport percentages). */
+/** `listen("work_inset", ...)` payload: `Message::WorkInset` (exact physical pixels). */
 export type WorkInsetMessage = {
-	message: { WorkInset: { Left: number; Right: number; Bottom: number } };
+	message: {
+		WorkInset: {
+			LeftPx: number;
+			RightPx: number;
+			BottomPx: number;
+			OverlayW: number;
+			OverlayH: number;
+		};
+	};
 };
 
 /** `listen("taskbar_frame", ...)` payload: `Message::TaskbarFrame`. */

@@ -283,10 +283,10 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 
 				let CurH = WinRect.bottom - WinRect.top;
 
-				if (WinRect.left - Screen.PhysicalX).abs() > 2
-					|| (WinRect.top - Screen.PhysicalY).abs() > 2
-					|| (CurW - Screen.Pixels.0).abs() > 2
-					|| (CurH - Screen.Pixels.1).abs() > 2
+				if WinRect.left != Screen.PhysicalX
+					|| WinRect.top != Screen.PhysicalY
+					|| CurW != Screen.Pixels.0
+					|| CurH != Screen.Pixels.1
 				{
 					let SnapApp = App.clone();
 

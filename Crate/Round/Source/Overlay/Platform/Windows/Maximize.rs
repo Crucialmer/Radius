@@ -354,9 +354,11 @@ pub fn Refresh<R:Runtime>(
 				"work_inset",
 				Payload {
 					Message:Message::WorkInset {
-						Left:f64::from(RelLeft) / f64::from(OverlayW) * 100.0,
-						Right:f64::from(RelRight) / f64::from(OverlayW) * 100.0,
-						Bottom:f64::from(RelBottom) / f64::from(OverlayH) * 100.0,
+						LeftPx:RelLeft,
+						RightPx:RelRight,
+						BottomPx:RelBottom,
+						OverlayW,
+						OverlayH,
 					},
 				},
 			);

@@ -1,30 +1,30 @@
 import "../Asset/CSS/Corner.css";
 
 export type TaskbarRimProperty = {
-	leftPct: number;
-	topPct: number;
-	widthPct: number;
-	heightPct: number;
+	leftPx: number;
+	topPx: number;
 	widthPx: number;
 	heightPx: number;
 	radiusPx: number;
 	scale: number;
+	dpr: number;
 };
 
 /**
- * Hardware-anti-aliased macOS 26 Liquid Glass rim aligned 1:1 in physical
- * pixels directly over the clipped Windows taskbar (`Shell_TrayWnd` /
- * `Shell_SecondaryTrayWnd`).
+ * Hardware-anti-aliased concentric macOS 26 Liquid Glass rim aligned 1:1 in
+ * exact physical pixels directly over the clipped Windows taskbar
+ * (`Shell_TrayWnd` / `Shell_SecondaryTrayWnd`).
  *
- * Uses viewport percentage bounds (`%`) paired with an exact physical-pixel SVG
- * `viewBox` (`0 0 widthPx heightPx`, `rx = radiusPx`) and a subtle diagonal
- * Liquid Glass refraction highlight so alignment stays exact across 1080p–8K,
- * 100%–400% DPI scaling, small/standard/multi-row taskbars, and monitor hotplugs.
+ * Positions the rim using `physicalPx / window.devicePixelRatio` from the exact
+ * `(0, 0)` viewport origin (never `%` / `100vh` / `bottom: 0`) so Chromium's
+ * integer-DIP viewport rounding at custom/fractional DPIs (e.g. 131 DPI / 136%,
+ * 110%, 175%) can never shift the rim downward by 1–2 physical pixels.
  */
 export default (Property: TaskbarRimProperty) => {
 	const Width = () => Math.max(2, Property.widthPx);
 	const Height = () => Math.max(2, Property.heightPx);
-	const Scale = () => Math.max(1, Property.scale || 1);
+	const Dpr = () => Math.max(0.5, Property.dpr || Property.scale || 1);
+	const Scale = () => Math.max(1, Property.dpr || Property.scale || 1);
 	const Radius = () => Math.min(Property.radiusPx, Math.min(Width(), Height()) / 2);
 	const OuterWidth = () => 1.0 * Scale();
 	const OuterInset = () => OuterWidth() / 2;
@@ -36,7 +36,7 @@ export default (Property: TaskbarRimProperty) => {
 	return (
 		<div
 			class="TaskbarRim"
-			style={`left: ${Property.leftPct}%; top: ${Property.topPct}%; width: ${Property.widthPct}%; height: ${Property.heightPct}%;`}>
+			style={`left: ${Property.leftPx / Dpr()}px; top: ${Property.topPx / Dpr()}px; width: ${Width() / Dpr()}px; height: ${Height() / Dpr()}px;`}>
 			<svg
 				class="TaskbarRim-Svg"
 				viewBox={`0 0 ${Width()} ${Height()}`}

@@ -4,6 +4,19 @@
 
 ---
 
+## 1.2.2
+
+### 核心修复（彻底根治非整倍/自定义缩放下圆角描边向下偏移 1–2px）
+
+- **定位并根治 Chromium / WebView2 分数缩放视口舍入偏移（如 `DPI=131 / 136%`、`110%`、`140%`、`175%`）**：
+  - 通过实机坐标诊断与 Edge/Chromium 引擎级复现确认：在非二进制分数 DPI（例如 4K `3840×2160 @ DPI=131 / 136.46%`）下，Chromium 会将 `100vh` / `100%` / `bottom: 0` 的视口高度取整到整数 CSS DIP，导致视口底部实际超出物理屏幕 `1–2px`，从而把原先依赖 `top: TopPct%` 的任务栏玻璃描边整框向下推偏 `1–2px`（顶边露缝、底边高光溢出裁切圆角外）。
+  - 彻底改用**物理像素 ÷ 实时 `window.devicePixelRatio`**从精确 `(0, 0)` 原点定位覆盖层容器（`.Window`）、任务栏玻璃描边（`.TaskbarRim`）与最大化底部圆角（`--WorkBottom`），并动态监听 `matchMedia(dppx)` 与 `resize` 实时响应缩放切换，同时移除 `.TaskbarRim` 的 `transform: translateZ(0)` 避免合成层整数 DIP 吸附。经 Edge 无头矩阵实测，在 `100% / 110% / 125% / 131 DPI (136%) / 150% / 175% / 200%` 全档位下顶边与底边误差均为 **`0 px`**。
+- **修复前端 `setIgnoreCursorEvents` 覆写覆盖层 Win32 样式的问题**：
+  - 将 `set_ignore_cursor_events(true)` 前置到 Rust 侧 `BuildOverlay`（`Platform::Art` 之前）并在 `overlay_ready` 重新稳固无边框工具窗样式，避免 Tao `WindowState::apply_diff` 在启动后将 `WS_CAPTION` / `WS_EX_WINDOWEDGE` 写回并覆盖 `WS_EX_TOOLWINDOW` / `WS_EX_NOACTIVATE`。
+  - 将 `Watch` 覆盖层位置自愈阈值由 `> 2px` 收紧至 `!= 0px`，确保任意 `1px` 偏移都能立即校准。
+
+---
+
 ## 1.2.1
 
 ### 视觉优化与修复（消除圆角阴影向下偏移）

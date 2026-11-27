@@ -14,17 +14,17 @@ use crate::{
 	Screen::Struct::Struct as Screen,
 };
 
-/// DPI-independent taskbar overlay snapshot used for initial window script injection.
+/// Exact physical-pixel taskbar overlay snapshot used for initial window script injection.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame {
 	pub Visible:bool,
 	pub Edge:&'static str,
-	pub LeftPct:f64,
-	pub TopPct:f64,
-	pub WidthPct:f64,
-	pub HeightPct:f64,
+	pub LeftPx:i32,
+	pub TopPx:i32,
 	pub WidthPx:i32,
 	pub HeightPx:i32,
+	pub OverlayW:i32,
+	pub OverlayH:i32,
 	pub RadiusPx:i32,
 	pub Scale:f64,
 }
@@ -34,12 +34,12 @@ impl Default for Frame {
 		Self {
 			Visible:false,
 			Edge:"none",
-			LeftPct:0.0,
-			TopPct:0.0,
-			WidthPct:0.0,
-			HeightPct:0.0,
+			LeftPx:0,
+			TopPx:0,
 			WidthPx:0,
 			HeightPx:0,
+			OverlayW:0,
+			OverlayH:0,
 			RadiusPx:0,
 			Scale:1.0,
 		}
@@ -549,9 +549,9 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 		return Frame::default();
 	};
 
-	let MonW = f64::from((MonRect.right - MonRect.left).max(1));
+	let MonW = (MonRect.right - MonRect.left).max(1);
 
-	let MonH = f64::from((MonRect.bottom - MonRect.top).max(1));
+	let MonH = (MonRect.bottom - MonRect.top).max(1);
 
 	for Hwnd in FindVisible() {
 		let Some((_, Vis)) = MeasureBounds(Hwnd, &MonRect, &WorkRect, None, Scale) else {
@@ -569,12 +569,12 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 		return Frame {
 			Visible:Clamped > 0,
 			Edge:DetectEdge(&Vis, &MonRect, Scale),
-			LeftPct:f64::from(Vis.left - MonRect.left) / MonW * 100.0,
-			TopPct:f64::from(Vis.top - MonRect.top) / MonH * 100.0,
-			WidthPct:f64::from(Width) / MonW * 100.0,
-			HeightPct:f64::from(Height) / MonH * 100.0,
+			LeftPx:Vis.left - MonRect.left,
+			TopPx:Vis.top - MonRect.top,
 			WidthPx:Width,
 			HeightPx:Height,
+			OverlayW:MonW,
+			OverlayH:MonH,
 			RadiusPx:Clamped,
 			Scale,
 		};
@@ -786,10 +786,6 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 			continue;
 		}
 
-		let OverlayW = f64::from(Target.OverlayW.max(1));
-
-		let OverlayH = f64::from(Target.OverlayH.max(1));
-
 		let Scale = (f64::from(Target.ScaleMilli) / 1000.0).max(1.0);
 
 		let _ = App.emit_to(
@@ -799,12 +795,12 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 				Message:Message::TaskbarFrame {
 					Visible:Target.Visible,
 					Edge:Target.Edge,
-					LeftPct:f64::from(Target.Left) / OverlayW * 100.0,
-					TopPct:f64::from(Target.Top) / OverlayH * 100.0,
-					WidthPct:f64::from(Target.Width) / OverlayW * 100.0,
-					HeightPct:f64::from(Target.Height) / OverlayH * 100.0,
+					LeftPx:Target.Left,
+					TopPx:Target.Top,
 					WidthPx:Target.Width,
 					HeightPx:Target.Height,
+					OverlayW:Target.OverlayW,
+					OverlayH:Target.OverlayH,
 					RadiusPx:Target.Radius,
 					Scale,
 				},
