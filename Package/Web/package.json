@@ -1,6 +1,6 @@
 {
 	"name": "@application/radius-web",
-	"version": "1.2.2",
+	"version": "1.2.3",
 	"private": true,
 	"description": "Radius 控制面板与屏幕圆角覆盖层前端。",
 	"homepage": "https://github.com/Crucialmer/Radius#readme",

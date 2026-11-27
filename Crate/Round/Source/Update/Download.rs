@@ -168,23 +168,42 @@ fn RunUpdate<R:Runtime>(
 
 		fs::create_dir_all(&StageDir).map_err(|Error| format!("无法创建解压目录: {Error}"))?;
 
-		let Output = Command::new("powershell.exe")
-			.args([
-				"-NoProfile",
-				"-NonInteractive",
-				"-WindowStyle",
-				"Hidden",
-				"-Command",
-				"Expand-Archive -LiteralPath $env:RADIUS_ZIP -DestinationPath $env:RADIUS_STAGE -Force",
-			])
-			.env("RADIUS_ZIP", &ArchivePath)
-			.env("RADIUS_STAGE", &StageDir)
-			.creation_flags(CREATE_NO_WINDOW)
-			.output()
-			.map_err(|Error| format!("无法调用系统解压工具: {Error}"))?;
+		// Prefer Windows 10/11 built-in native `System32\tar.exe` (~25ms, zero .NET
+		// CLR / AMSI overhead); fall back to PowerShell only on older environments.
+		let TarPath = System32Tool("tar.exe");
 
-		if !Output.status.success() {
-			return Err("解压更新压缩包失败".to_owned());
+		let TarOk = Command::new(&TarPath)
+			.arg("-xf")
+			.arg(&ArchivePath)
+			.arg("-C")
+			.arg(&StageDir)
+			.stdin(Stdio::null())
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.creation_flags(CREATE_NO_WINDOW)
+			.status()
+			.is_ok_and(|Status| Status.success());
+
+		if !TarOk {
+			let Output = Command::new("powershell.exe")
+				.args([
+					"-NoProfile",
+					"-NonInteractive",
+					"-WindowStyle",
+					"Hidden",
+					"-Command",
+					"Expand-Archive -LiteralPath $env:RADIUS_ZIP -DestinationPath $env:RADIUS_STAGE -Force",
+				])
+				.env("RADIUS_ZIP", &ArchivePath)
+				.env("RADIUS_STAGE", &StageDir)
+				.stdin(Stdio::null())
+				.creation_flags(CREATE_NO_WINDOW)
+				.output()
+				.map_err(|Error| format!("无法调用系统解压工具: {Error}"))?;
+
+			if !Output.status.success() {
+				return Err("解压更新压缩包失败".to_owned());
+			}
 		}
 
 		FindExe(&StageDir).ok_or_else(|| "更新包中未找到 Radius.exe".to_owned())?
@@ -215,69 +234,66 @@ fn RunUpdate<R:Runtime>(
 		State.Message = Some("校验通过，正在重启并安装更新...".to_owned());
 	});
 
-	let ScriptPath = UpdateDir.join("apply.ps1");
+	let WorkDir = CurrentExe
+		.parent()
+		.map(Path::to_path_buf)
+		.unwrap_or_else(crate::Settings::Store::Dir);
 
-	let ScriptTemplate = r#"$ErrorActionPreference = 'Stop'
-$pidToWait = [int]$env:RADIUS_PID
-$targetExe = $env:RADIUS_TARGET
-$stagedExe = $env:RADIUS_STAGED
-$workDir = Split-Path -Parent $targetExe
-$backupExe = "$targetExe.bak"
+	let ScriptPath = UpdateDir.join("apply.cmd");
 
-for ($i = 0; $i -lt 120; $i++) {
-	if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }
-	Start-Sleep -Milliseconds 200
-}
-
-for ($i = 0; $i -lt 30; $i++) {
-	try {
-		if (Test-Path -LiteralPath $backupExe) {
-			Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
-		}
-		if (Test-Path -LiteralPath $targetExe) {
-			Move-Item -LiteralPath $targetExe -Destination $backupExe -Force
-		}
-		Move-Item -LiteralPath $stagedExe -Destination $targetExe -Force
-		Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
-		break
-	} catch {
-		if (-not (Test-Path -LiteralPath $targetExe) -and (Test-Path -LiteralPath $backupExe)) {
-			Move-Item -LiteralPath $backupExe -Destination $targetExe -Force -ErrorAction SilentlyContinue
-		}
-		Start-Sleep -Milliseconds 250
-	}
-}
-
-if (Test-Path -LiteralPath $targetExe) {
-	Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue
-	Start-Process -FilePath $targetExe -WorkingDirectory $workDir
-}
-"#;
-
-	let ScriptBody = format!("\u{FEFF}{ScriptTemplate}");
+	// Ultra-lightweight native cmd.exe swapper (~100ms, zero .NET CLR / AMSI
+	// stall, UTF-16 env vars for Chinese & space paths, locale-independent CSV
+	// tasklist check).
+	let ScriptBody = "@echo off\r\nsetlocal EnableExtensions\r\nset /a TRIES=0\r\n:waitloop\r\ntasklist /FI \"PID eq \
+	                  %RADIUS_PID%\" /FO CSV /NH 2>nul | findstr /C:\",\\\"%RADIUS_PID%\\\",\" >nul\r\nif errorlevel \
+	                  1 goto swap\r\nset /a TRIES+=1\r\nif %TRIES% GEQ 20 goto swap\r\nping -n 2 127.0.0.1 \
+	                  >nul\r\ngoto waitloop\r\n:swap\r\nset /a STRIES=0\r\n:swaploop\r\nif exist \
+	                  \"%RADIUS_TARGET%.bak\" del /f /q \"%RADIUS_TARGET%.bak\" >nul 2>&1\r\nif exist \
+	                  \"%RADIUS_TARGET%\" move /y \"%RADIUS_TARGET%\" \"%RADIUS_TARGET%.bak\" >nul 2>&1\r\nmove /y \
+	                  \"%RADIUS_STAGED%\" \"%RADIUS_TARGET%\" >nul 2>&1\r\nif not errorlevel 1 (\r\nif exist \
+	                  \"%RADIUS_TARGET%.bak\" del /f /q \"%RADIUS_TARGET%.bak\" >nul 2>&1\r\ngoto launch\r\n)\r\nif \
+	                  not exist \"%RADIUS_TARGET%\" if exist \"%RADIUS_TARGET%.bak\" move /y \"%RADIUS_TARGET%.bak\" \
+	                  \"%RADIUS_TARGET%\" >nul 2>&1\r\nset /a STRIES+=1\r\nif %STRIES% GEQ 20 goto launch\r\nping -n \
+	                  2 127.0.0.1 >nul\r\ngoto swaploop\r\n:launch\r\nif exist \"%RADIUS_TARGET%\" start \"\" /d \
+	                  \"%RADIUS_WORKDIR%\" \"%RADIUS_TARGET%\"\r\nexit /b 0\r\n";
 
 	fs::write(&ScriptPath, ScriptBody.as_bytes()).map_err(|Error| format!("无法生成安装脚本: {Error}"))?;
 
-	// Restore the taskbar region and delete the tray icon cleanly before exiting
-	// into the swapper so Windows does not leave a ghost tray icon after restart.
-	crate::Overlay::Platform::Taskbar::Restore();
-	crate::Tray::Remove::Fn(App);
-	std::thread::sleep(std::time::Duration::from_millis(50));
+	// 1. Stop the background WinEvent watcher immediately so it cannot fight
+	//    window teardown or re-clip `Shell_TrayWnd` while we are exiting.
+	crate::Overlay::Platform::Watch::Stop();
 
-	Command::new("powershell.exe")
-		.args([
-			"-NoProfile",
-			"-NonInteractive",
-			"-WindowStyle",
-			"Hidden",
-			"-ExecutionPolicy",
-			"Bypass",
-			"-File",
-		])
+	// 2. Hide all topmost click-eating scrims, panel, and overlays on the main
+	//    thread (with a bounded wait so shutdown can never deadlock), restore
+	//    the taskbar region, and delete the tray icon cleanly.
+	let (DoneTx, DoneRx) = std::sync::mpsc::sync_channel::<()>(1);
+
+	let MainApp = App.clone();
+
+	let _ = App.run_on_main_thread(move || {
+		crate::Backdrop::Close::Fn(&MainApp);
+
+		for Window in MainApp.webview_windows().into_values() {
+			let _ = Window.hide();
+		}
+
+		crate::Overlay::Platform::Taskbar::Restore();
+		crate::Tray::Remove::Fn(&MainApp);
+
+		let _ = DoneTx.send(());
+	});
+
+	let _ = DoneRx.recv_timeout(std::time::Duration::from_millis(800));
+
+	let CmdPath = System32Tool("cmd.exe");
+
+	Command::new(&CmdPath)
+		.args(["/d", "/c"])
 		.arg(&ScriptPath)
 		.env("RADIUS_PID", std::process::id().to_string())
 		.env("RADIUS_TARGET", &CurrentExe)
 		.env("RADIUS_STAGED", StripVerbatim(StagedExe))
+		.env("RADIUS_WORKDIR", &WorkDir)
 		.stdin(Stdio::null())
 		.stdout(Stdio::null())
 		.stderr(Stdio::null())
@@ -285,9 +301,31 @@ if (Test-Path -LiteralPath $targetExe) {
 		.spawn()
 		.map_err(|Error| format!("无法启动更新安装程序: {Error}"))?;
 
-	App.exit(0);
+	// Guarantee the old process exits promptly even if a WebView2 controller
+	// stalls during teardown, so the swapper replaces `Radius.exe` in ~150ms.
+	std::thread::spawn(|| {
+		std::thread::sleep(std::time::Duration::from_millis(1500));
+		std::process::exit(0);
+	});
+
+	let ExitApp = App.clone();
+
+	let _ = App.run_on_main_thread(move || {
+		ExitApp.exit(0);
+	});
 
 	Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn System32Tool(Name:&str) -> std::path::PathBuf {
+	let Root = std::env::var_os("SystemRoot")
+		.map(std::path::PathBuf::from)
+		.unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+
+	let Candidate = Root.join("System32").join(Name);
+
+	if Candidate.is_file() { Candidate } else { std::path::PathBuf::from(Name) }
 }
 
 #[cfg(target_os = "windows")]
@@ -514,7 +552,9 @@ fn StreamDownload<R:Runtime>(
 				.checked_div(TotalBytes)
 				.map_or(0, |Ratio| Ratio.min(100) as u8);
 
-			if Percent != LastPercent || LastEmit.elapsed() >= Duration::from_millis(65) {
+			// Strictly throttle IPC progress updates to >= 120ms (plus final 100%)
+			// so high-speed downloads never flood WebView2 & ResizeObserver on the main thread.
+			if LastEmit.elapsed() >= Duration::from_millis(120) || (Percent == 100 && LastPercent != 100) {
 				LastPercent = Percent;
 				LastEmit = Instant::now();
 

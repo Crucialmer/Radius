@@ -136,6 +136,8 @@ fn main() {
 				api.prevent_exit();
 			}
 			tauri::RunEvent::Exit => {
+				pround::Overlay::Platform::Watch::Stop();
+				pround::Backdrop::Close::Fn(App);
 				pround::Overlay::Platform::Taskbar::Restore();
 				TrayRemove::Fn(App);
 			}

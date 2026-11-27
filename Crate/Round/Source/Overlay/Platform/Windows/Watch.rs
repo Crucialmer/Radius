@@ -9,7 +9,7 @@ use std::{
 	sync::{
 		Mutex,
 		OnceLock,
-		atomic::{AtomicBool, AtomicU8, Ordering},
+		atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering},
 	},
 };
 
@@ -42,6 +42,10 @@ static SyncCallback:OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 static ReconcileCallback:OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 static Started:AtomicBool = AtomicBool::new(false);
+
+static Stopping:AtomicBool = AtomicBool::new(false);
+
+static WatchThreadId:AtomicU32 = AtomicU32::new(0);
 
 static NeedsZOrder:AtomicBool = AtomicBool::new(true);
 
@@ -86,9 +90,33 @@ pub fn ScheduleReconcile() {
 	DisplayDebounceTicks.store(4, Ordering::Release);
 }
 
+/// Stop the background WinEvent hook, display listener, and timer loop cleanly
+/// before exiting or self-updating so no background Win32 calls race with
+/// window teardown or `Taskbar::Restore()`.
+pub fn Stop() {
+	Stopping.store(true, Ordering::Release);
+
+	#[cfg(target_os = "windows")]
+	{
+		let Tid = WatchThreadId.load(Ordering::Acquire);
+
+		if Tid != 0 {
+			unsafe {
+				let _ = windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+					Tid,
+					windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT,
+					0,
+					0,
+				);
+			}
+		}
+	}
+}
+
 /// Start the background WinEvent hook, display-change listener, and lightweight
 /// Z-order/window watcher once.
 pub fn Start<R:Runtime>(App:AppHandle<R>, Initial:&Settings) {
+	Stopping.store(false, Ordering::Release);
 	*LatestSettings.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner()) = Some(Initial.clone());
 
 	#[cfg(target_os = "windows")]
@@ -125,6 +153,10 @@ pub fn Start<R:Runtime>(App:AppHandle<R>, Initial:&Settings) {
 }
 
 fn RunOnce<R:Runtime>(App:&AppHandle<R>) {
+	if Stopping.load(Ordering::Acquire) {
+		return;
+	}
+
 	// Never race against Windows while a display plug/unplug transition is settling.
 	if DisplayDebounceTicks.load(Ordering::Acquire) > 0 {
 		return;
@@ -381,16 +413,18 @@ fn RunMessageLoop() {
 	};
 
 	unsafe extern "system" fn OnDisplayWindowProc(Hwnd:HWND, Msg:u32, WParam:WPARAM, LParam:LPARAM) -> LRESULT {
-		match Msg {
-			WM_DISPLAYCHANGE => {
-				ScheduleReconcile();
+		if !Stopping.load(Ordering::Acquire) {
+			match Msg {
+				WM_DISPLAYCHANGE => {
+					ScheduleReconcile();
+				}
+				WM_SETTINGCHANGE => {
+					NeedsMaximize.store(true, Ordering::Release);
+					NeedsTaskbar.store(true, Ordering::Release);
+					BurstTicks.store(4, Ordering::Release);
+				}
+				_ => {}
 			}
-			WM_SETTINGCHANGE => {
-				NeedsMaximize.store(true, Ordering::Release);
-				NeedsTaskbar.store(true, Ordering::Release);
-				BurstTicks.store(4, Ordering::Release);
-			}
-			_ => {}
 		}
 
 		unsafe { DefWindowProcW(Hwnd, Msg, WParam, LParam) }
@@ -405,6 +439,10 @@ fn RunMessageLoop() {
 		_Thread:u32,
 		_Time:u32,
 	) {
+		if Stopping.load(Ordering::Acquire) {
+			return;
+		}
+
 		// Ignore non-window sub-element events (OBJID_WINDOW == 0, CHILDID_SELF == 0).
 		if Event >= EVENT_OBJECT_SHOW && (IdObject != 0 || IdChild != 0) {
 			return;
@@ -428,6 +466,10 @@ fn RunMessageLoop() {
 	static IdleTicks:AtomicU16 = AtomicU16::new(0);
 
 	unsafe extern "system" fn OnTimer(_Hwnd:HWND, _Msg:u32, _Id:usize, _Time:u32) {
+		if Stopping.load(Ordering::Acquire) {
+			return;
+		}
+
 		// First check if a display hotplug / DPI transition debounce is counting down.
 		let Debounce = DisplayDebounceTicks.load(Ordering::Acquire);
 
@@ -525,6 +567,8 @@ fn RunMessageLoop() {
 	}
 
 	unsafe {
+		WatchThreadId.store(windows_sys::Win32::System::Threading::GetCurrentThreadId(), Ordering::Release);
+
 		// Hidden top-level listener window receives broadcast `WM_DISPLAYCHANGE`
 		// and `WM_SETTINGCHANGE` notifications immediately on monitor plug/unplug.
 		let ClassName:Vec<u16> = "RadiusDisplayWatch\0".encode_utf16().collect();
