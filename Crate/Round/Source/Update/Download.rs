@@ -258,8 +258,11 @@ if (Test-Path -LiteralPath $targetExe) {
 
 	fs::write(&ScriptPath, ScriptBody.as_bytes()).map_err(|Error| format!("无法生成安装脚本: {Error}"))?;
 
-	// Restore the taskbar region cleanly before exiting into the swapper.
+	// Restore the taskbar region and delete the tray icon cleanly before exiting
+	// into the swapper so Windows does not leave a ghost tray icon after restart.
 	crate::Overlay::Platform::Taskbar::Restore();
+	crate::Tray::Remove::Fn(App);
+	std::thread::sleep(std::time::Duration::from_millis(50));
 
 	Command::new("powershell.exe")
 		.args([

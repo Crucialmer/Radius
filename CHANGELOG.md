@@ -4,6 +4,16 @@
 
 ---
 
+## 1.1.6
+
+### 修复
+
+- **修复系统托盘出现多个重复图标的 Bug**：
+  - 新增 Windows 会话级单实例互斥锁（`CreateMutexW` / `Local\Crucialmer.Radius.SingleInstance`），防止开机自启、重复双击或并发启动导致多个 `Radius.exe` 同时运行并重复注册托盘图标。
+  - 新增退出前显式注销托盘图标（`Tray::Remove::Fn`，触发 `Shell_NotifyIconW(NIM_DELETE)`），在点击「退出 Radius」、应用内自动更新重启及 `RunEvent::Exit` 退出前先隐藏并移除旧托盘图标，彻底消除退出或连续自动升级后托盘残留的“幽灵图标”。
+
+---
+
 ## 1.1.5
 
 ### 修复
