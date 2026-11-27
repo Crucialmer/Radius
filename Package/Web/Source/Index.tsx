@@ -59,11 +59,14 @@ function Overlay() {
 		window.settings.taskbarFrame ?? {
 			Visible: false,
 			Edge: "none",
-			Left: 0,
-			Top: 0,
-			Width: 0,
-			Height: 0,
-			Radius: 0,
+			LeftPct: 0,
+			TopPct: 0,
+			WidthPct: 0,
+			HeightPct: 0,
+			WidthPx: 0,
+			HeightPx: 0,
+			RadiusPx: 0,
+			Scale: 1,
 		},
 	);
 
@@ -79,9 +82,10 @@ function Overlay() {
 		return AllCorners;
 	};
 
-	const ShowMaxCorners = () => ScreenVisible() && MaximizeCorners() && Maximized() && WorkInset().Bottom > 1;
+	const ShowMaxCorners = () => ScreenVisible() && MaximizeCorners() && Maximized() && WorkInset().Bottom > 0.1;
 
-	const ShowTaskbarRim = () => Taskbar().Visible && Taskbar().Radius > 0 && Taskbar().Width > 2 && Taskbar().Height > 2;
+	const ShowTaskbarRim = () =>
+		Taskbar().Visible && Taskbar().RadiusPx > 0 && Taskbar().WidthPx > 2 && Taskbar().HeightPx > 2;
 
 	onMount(() => {
 		void Current.setIgnoreCursorEvents(true);
@@ -156,7 +160,7 @@ function Overlay() {
 			data-label={Current.label}
 			data-mode={Mode()}
 			data-max-corners={ShowMaxCorners() ? "true" : "false"}
-			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}px; --WorkRight: ${WorkInset().Right}px; --WorkBottom: ${WorkInset().Bottom}px`}>
+			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}vw; --WorkRight: ${WorkInset().Right}vw; --WorkBottom: ${WorkInset().Bottom}vh`}>
 			<Show when={ScreenVisible()}>
 				<For each={ActiveScreenCorners()}>{(corner) => <Corner id={corner} />}</For>
 			</Show>
@@ -165,11 +169,14 @@ function Overlay() {
 			</Show>
 			<Show when={ShowTaskbarRim()}>
 				<TaskbarRim
-					left={Taskbar().Left}
-					top={Taskbar().Top}
-					width={Taskbar().Width}
-					height={Taskbar().Height}
-					radius={Taskbar().Radius}
+					leftPct={Taskbar().LeftPct}
+					topPct={Taskbar().TopPct}
+					widthPct={Taskbar().WidthPct}
+					heightPct={Taskbar().HeightPct}
+					widthPx={Taskbar().WidthPx}
+					heightPx={Taskbar().HeightPx}
+					radiusPx={Taskbar().RadiusPx}
+					scale={Taskbar().Scale}
 				/>
 			</Show>
 		</div>

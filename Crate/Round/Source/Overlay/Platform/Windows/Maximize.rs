@@ -24,7 +24,8 @@ struct MonitorState {
 	Left:i32,
 	Right:i32,
 	Bottom:i32,
-	ScaleMilli:i32,
+	OverlayW:i32,
+	OverlayH:i32,
 }
 
 static Cache:Mutex<Option<HashMap<String, MonitorState>>> = Mutex::new(None);
@@ -314,12 +315,25 @@ pub fn Refresh<R:Runtime>(
 
 		Reports.insert(Item.Label.clone(), MonitorReport { Fullscreen:IsFullscreen, MaxBottom });
 
+		let WinRect = Taskbar::OverlayRect(App, &Item.Label, MonRect);
+
+		let OverlayW = (WinRect.right - WinRect.left).max(1);
+
+		let OverlayH = (WinRect.bottom - WinRect.top).max(1);
+
+		let RelLeft = (MonRect.left + LeftPx - WinRect.left).max(0);
+
+		let RelRight = (WinRect.right - (MonRect.right - RightPx)).max(0);
+
+		let RelBottom = (WinRect.bottom - (MonRect.bottom - BottomPx)).max(0);
+
 		let NextState = MonitorState {
 			Maximized:HasMaximized,
-			Left:LeftPx,
-			Right:RightPx,
-			Bottom:BottomPx,
-			ScaleMilli:(Scale * 1000.0).round() as i32,
+			Left:RelLeft,
+			Right:RelRight,
+			Bottom:RelBottom,
+			OverlayW,
+			OverlayH,
 		};
 
 		let Previous = Map.get(&Item.Label).copied();
@@ -328,16 +342,17 @@ pub fn Refresh<R:Runtime>(
 			Prev.Left != NextState.Left
 				|| Prev.Right != NextState.Right
 				|| Prev.Bottom != NextState.Bottom
-				|| Prev.ScaleMilli != NextState.ScaleMilli
+				|| Prev.OverlayW != NextState.OverlayW
+				|| Prev.OverlayH != NextState.OverlayH
 		}) {
 			let _ = App.emit_to(
 				Item.Label.as_str(),
 				"work_inset",
 				Payload {
 					Message:Message::WorkInset {
-						Left:f64::from(LeftPx) / Scale,
-						Right:f64::from(RightPx) / Scale,
-						Bottom:f64::from(BottomPx) / Scale,
+						Left:f64::from(RelLeft) / f64::from(OverlayW) * 100.0,
+						Right:f64::from(RelRight) / f64::from(OverlayW) * 100.0,
+						Bottom:f64::from(RelBottom) / f64::from(OverlayH) * 100.0,
 					},
 				},
 			);

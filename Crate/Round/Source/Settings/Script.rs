@@ -31,11 +31,14 @@ pub fn Fn(State:&Struct, Target:&Screen) -> String {
 			"taskbarFrame": {
 				"Visible": Frame.Visible,
 				"Edge": Frame.Edge,
-				"Left": Frame.Left,
-				"Top": Frame.Top,
-				"Width": Frame.Width,
-				"Height": Frame.Height,
-				"Radius": Frame.Radius,
+				"LeftPct": Frame.LeftPct,
+				"TopPct": Frame.TopPct,
+				"WidthPct": Frame.WidthPct,
+				"HeightPct": Frame.HeightPct,
+				"WidthPx": Frame.WidthPx,
+				"HeightPx": Frame.HeightPx,
+				"RadiusPx": Frame.RadiusPx,
+				"Scale": Frame.Scale,
 			},
 		})
 	)

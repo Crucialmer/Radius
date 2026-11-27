@@ -24,10 +24,13 @@ pub enum Enum {
 	TaskbarFrame {
 		Visible:bool,
 		Edge:&'static str,
-		Left:f64,
-		Top:f64,
-		Width:f64,
-		Height:f64,
-		Radius:f64,
+		LeftPct:f64,
+		TopPct:f64,
+		WidthPct:f64,
+		HeightPct:f64,
+		WidthPx:i32,
+		HeightPx:i32,
+		RadiusPx:i32,
+		Scale:f64,
 	},
 }

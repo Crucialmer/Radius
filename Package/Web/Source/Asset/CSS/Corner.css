@@ -95,12 +95,10 @@
 .TaskbarRim-Outer {
 	fill: none;
 	stroke: rgba(15, 18, 26, 0.18);
-	stroke-width: 1.4;
 }
 
 .TaskbarRim-Specular {
 	fill: none;
-	stroke-width: 1.1;
 }
 
 .TaskbarRim-StopTop {

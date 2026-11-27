@@ -4,6 +4,17 @@
 
 ---
 
+## 1.1.5
+
+### 修复
+
+- **修复任务栏圆角与玻璃描边位置偏移的 Bug**：
+  - 将任务栏描边与最大化工作区定位从依赖 CSS 像素换算（`px / Scale`）彻底升级为**视口归一化比例坐标（`%` / `vw` / `vh`）+ 物理像素 SVG `viewBox`**，直接以覆盖层窗口真实物理矩形（`GetWindowRect`）为基准定位，彻底消除跨 DPI 多屏热插拔、分数缩放（125%/150%/175%）或系统字体缩放下 `devicePixelRatio` 差异导致的任务栏圆角框错位。
+  - 将 `.Window` 覆盖层容器锁定为 `position: fixed; inset: 0; width: 100vw; height: 100vh; overflow: hidden`，消除子像素溢出引起的偏移。
+  - 收紧任务栏 `DesktopWindowContentBridge` 与 `MaxBottom` 裁切阈值：仅在紧贴屏幕外边缘且存在真实小任务栏高度差（`≥8dp` / `≥12dp`）时才收紧可视边界，避免 Windows 11 内部 XAML 1–6px 内边距或无边框最大化窗口微溢出把任务栏顶部圆角向下错切。
+
+---
+
 ## 1.1.4
 
 ### 修复

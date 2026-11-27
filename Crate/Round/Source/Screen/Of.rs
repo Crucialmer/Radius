@@ -39,6 +39,10 @@ pub fn Fn(Monitor:&Monitor, Index:usize) -> Struct {
 
 	let Claim = Claim { Label:Label::Fn(Name), X:Origin.x, Y:Origin.y };
 
+	let MonW = f64::from((SizePx.width as i32).max(1));
+
+	let MonH = f64::from((SizePx.height as i32).max(1));
+
 	Struct {
 		Label:Claim.Label.clone(),
 		Qualified:Suffix::Fn(&Claim),
@@ -51,9 +55,9 @@ pub fn Fn(Monitor:&Monitor, Index:usize) -> Struct {
 		Y:Position.y,
 		PhysicalX:Origin.x,
 		PhysicalY:Origin.y,
-		WorkLeft:f64::from((Work.position.x - Origin.x).max(0)) / Factor,
-		WorkRight:f64::from((MonRight - WorkRightPx).max(0)) / Factor,
-		WorkBottom:f64::from((MonBottom - WorkBottomPx).max(0)) / Factor,
+		WorkLeft:f64::from((Work.position.x - Origin.x).max(0)) / MonW * 100.0,
+		WorkRight:f64::from((MonRight - WorkRightPx).max(0)) / MonW * 100.0,
+		WorkBottom:f64::from((MonBottom - WorkBottomPx).max(0)) / MonH * 100.0,
 		ScaleFactor:Factor,
 	}
 }

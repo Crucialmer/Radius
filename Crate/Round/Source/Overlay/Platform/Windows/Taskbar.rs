@@ -5,7 +5,7 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::{
 	Message::{Enum::Enum as Message, Payload::Struct as Payload},
@@ -14,20 +14,36 @@ use crate::{
 	Screen::Struct::Struct as Screen,
 };
 
-/// Logical taskbar overlay snapshot used for initial window script injection.
+/// DPI-independent taskbar overlay snapshot used for initial window script injection.
 #[derive(Clone, Copy, Debug)]
 pub struct Frame {
 	pub Visible:bool,
 	pub Edge:&'static str,
-	pub Left:f64,
-	pub Top:f64,
-	pub Width:f64,
-	pub Height:f64,
-	pub Radius:f64,
+	pub LeftPct:f64,
+	pub TopPct:f64,
+	pub WidthPct:f64,
+	pub HeightPct:f64,
+	pub WidthPx:i32,
+	pub HeightPx:i32,
+	pub RadiusPx:i32,
+	pub Scale:f64,
 }
 
 impl Default for Frame {
-	fn default() -> Self { Self { Visible:false, Edge:"none", Left:0.0, Top:0.0, Width:0.0, Height:0.0, Radius:0.0 } }
+	fn default() -> Self {
+		Self {
+			Visible:false,
+			Edge:"none",
+			LeftPct:0.0,
+			TopPct:0.0,
+			WidthPct:0.0,
+			HeightPct:0.0,
+			WidthPx:0,
+			HeightPx:0,
+			RadiusPx:0,
+			Scale:1.0,
+		}
+	}
 }
 
 /// Cached taskbar clip region geometry and ellipse diameter.
@@ -43,7 +59,8 @@ struct ClipEntry {
 
 static Cache:Mutex<Vec<ClipEntry>> = Mutex::new(Vec::new());
 
-/// Last emitted overlay rim frame per monitor, stored in physical pixels plus milli-scale for exact diffing.
+/// Last emitted overlay rim frame per monitor, stored in physical pixels plus
+/// overlay dimensions and milli-scale for exact diffing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FrameKey {
 	Visible:bool,
@@ -52,6 +69,8 @@ struct FrameKey {
 	Top:i32,
 	Width:i32,
 	Height:i32,
+	OverlayW:i32,
+	OverlayH:i32,
 	Radius:i32,
 	ScaleMilli:i32,
 }
@@ -102,6 +121,36 @@ pub fn InvalidateAll() {
 	if let Some(Map) = FrameGuard.as_mut() {
 		Map.clear();
 	}
+}
+
+/// Return the actual physical Win32 rectangle of one monitor's overlay window,
+/// falling back to `Fallback` if the window is not yet created.
+#[cfg(target_os = "windows")]
+pub fn OverlayRect<R:Runtime>(
+	App:&AppHandle<R>,
+	Label:&str,
+	Fallback:windows_sys::Win32::Foundation::RECT,
+) -> windows_sys::Win32::Foundation::RECT {
+	use windows_sys::Win32::{
+		Foundation::{HWND, RECT},
+		UI::WindowsAndMessaging::{GetWindowRect, IsWindow},
+	};
+
+	if let Some(Window) = App.get_webview_window(Label)
+		&& let Ok(Raw) = Window.hwnd()
+	{
+		let Hwnd = Raw.0 as HWND;
+
+		if !Hwnd.is_null() && unsafe { IsWindow(Hwnd) } != 0 {
+			let mut Rect = RECT { left:0, top:0, right:0, bottom:0 };
+
+			if unsafe { GetWindowRect(Hwnd, &mut Rect) } != 0 && Rect.right > Rect.left && Rect.bottom > Rect.top {
+				return Rect;
+			}
+		}
+	}
+
+	Fallback
 }
 
 /// Query live physical `(rcMonitor, rcWork, ScaleFactor)` for `ScreenItem` using
@@ -278,9 +327,12 @@ fn MeasureBounds(
 		return None;
 	}
 
-	// On Windows 11, check if the full-span XAML content bridge is strictly tighter
-	// than the outer `Shell_TrayWnd` host (common with small-taskbar mods).
+	// On Windows 11, only adopt a full-span XAML content bridge trim when it is
+	// flush with the docked screen edge and genuinely shorter by a real small-taskbar
+	// step (>= 8px), so minor 1-6px internal XAML insets never shift the rim off edge.
 	let Horizontal = VisW >= VisH;
+
+	let MinTrim = (8.0 * Scale).round() as i32;
 
 	unsafe {
 		let mut Child = FindWindowExW(Hwnd, ptr::null_mut(), BridgeClass.as_ptr(), ptr::null());
@@ -294,24 +346,24 @@ fn MeasureBounds(
 
 					let BridgeH = Bridge.bottom - Bridge.top;
 
-					if Horizontal && BridgeW >= (VisW * 9) / 10 && BridgeH >= 16 && BridgeH < VisH {
-						let NextTop = Vis.top.max(Bridge.top);
-
-						let NextBottom = Vis.bottom.min(Bridge.bottom);
-
-						if NextBottom - NextTop >= 16 {
-							Vis.top = NextTop;
-							Vis.bottom = NextBottom;
+					if Horizontal && BridgeW >= (VisW * 9) / 10 && BridgeH >= 16 && VisH - BridgeH >= MinTrim {
+						if Vis.bottom >= MonRect.bottom - 8 && Bridge.bottom >= Vis.bottom - 2 && Bridge.top > Vis.top {
+							Vis.top = Bridge.top;
+							VisH = Vis.bottom - Vis.top;
+						} else if Vis.top <= MonRect.top + 8 && Bridge.top <= Vis.top + 2 && Bridge.bottom < Vis.bottom
+						{
+							Vis.bottom = Bridge.bottom;
 							VisH = Vis.bottom - Vis.top;
 						}
-					} else if !Horizontal && BridgeH >= (VisH * 9) / 10 && BridgeW >= 16 && BridgeW < VisW {
-						let NextLeft = Vis.left.max(Bridge.left);
-
-						let NextRight = Vis.right.min(Bridge.right);
-
-						if NextRight - NextLeft >= 16 {
-							Vis.left = NextLeft;
-							Vis.right = NextRight;
+					} else if !Horizontal && BridgeH >= (VisH * 9) / 10 && BridgeW >= 16 && VisW - BridgeW >= MinTrim {
+						if Vis.left <= MonRect.left + 8 && Bridge.left <= Vis.left + 2 && Bridge.right < Vis.right {
+							Vis.right = Bridge.right;
+							VisW = Vis.right - Vis.left;
+						} else if Vis.right >= MonRect.right - 8
+							&& Bridge.right >= Vis.right - 2
+							&& Bridge.left > Vis.left
+						{
+							Vis.left = Bridge.left;
 							VisW = Vis.right - Vis.left;
 						}
 					}
@@ -331,10 +383,13 @@ fn MeasureBounds(
 				Vis.top = WorkRect.bottom;
 			}
 
-			let BleedTol = (4.0 * Scale).round() as i32;
+			// Only let a maximized window's bottom trim `Shell_TrayWnd` when the step
+			// is a genuine small-taskbar delta (>= 12dp, e.g. 48dp -> 32dp), never
+			// letting a 5-10px custom-frame app bleed chop off the top of a normal taskbar.
+			let SmallTaskbarDelta = (12.0 * Scale).round() as i32;
 
 			if let Some(Bottom) = MaxBottom
-				&& Bottom > Vis.top + BleedTol
+				&& Bottom >= Vis.top + SmallTaskbarDelta
 				&& Bottom < Vis.bottom - 12
 			{
 				Vis.top = Bottom;
@@ -439,6 +494,10 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 		return Frame::default();
 	};
 
+	let MonW = f64::from((MonRect.right - MonRect.left).max(1));
+
+	let MonH = f64::from((MonRect.bottom - MonRect.top).max(1));
+
 	for Hwnd in FindVisible() {
 		let Some((_, Vis)) = MeasureBounds(Hwnd, &MonRect, &WorkRect, None, Scale) else {
 			continue;
@@ -455,11 +514,14 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 		return Frame {
 			Visible:Clamped > 0,
 			Edge:DetectEdge(&Vis, &MonRect),
-			Left:f64::from(Vis.left - MonRect.left) / Scale,
-			Top:f64::from(Vis.top - MonRect.top) / Scale,
-			Width:f64::from(Width) / Scale,
-			Height:f64::from(Height) / Scale,
-			Radius:f64::from(Clamped) / Scale,
+			LeftPct:f64::from(Vis.left - MonRect.left) / MonW * 100.0,
+			TopPct:f64::from(Vis.top - MonRect.top) / MonH * 100.0,
+			WidthPct:f64::from(Width) / MonW * 100.0,
+			HeightPct:f64::from(Height) / MonH * 100.0,
+			WidthPx:Width,
+			HeightPx:Height,
+			RadiusPx:Clamped,
+			Scale,
 		};
 	}
 
@@ -613,15 +675,23 @@ pub fn Apply<R:Runtime>(
 
 		let Visible = Clamped > 0 && !Covered;
 
+		let WinRect = OverlayRect(App, &Item.Label, MonRect);
+
+		let OverlayW = (WinRect.right - WinRect.left).max(1);
+
+		let OverlayH = (WinRect.bottom - WinRect.top).max(1);
+
 		NextFrames.insert(
 			Item.Label.clone(),
 			FrameKey {
 				Visible,
 				Edge,
-				Left:Vis.left - MonRect.left,
-				Top:Vis.top - MonRect.top,
+				Left:Vis.left - WinRect.left,
+				Top:Vis.top - WinRect.top,
 				Width,
 				Height,
+				OverlayW,
+				OverlayH,
 				Radius:Clamped,
 				ScaleMilli:(Scale * 1000.0).round() as i32,
 			},
@@ -648,6 +718,8 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 		Top:0,
 		Width:0,
 		Height:0,
+		OverlayW:1,
+		OverlayH:1,
 		Radius:0,
 		ScaleMilli:1000,
 	};
@@ -659,6 +731,10 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 			continue;
 		}
 
+		let OverlayW = f64::from(Target.OverlayW.max(1));
+
+		let OverlayH = f64::from(Target.OverlayH.max(1));
+
 		let Scale = (f64::from(Target.ScaleMilli) / 1000.0).max(1.0);
 
 		let _ = App.emit_to(
@@ -668,11 +744,14 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 				Message:Message::TaskbarFrame {
 					Visible:Target.Visible,
 					Edge:Target.Edge,
-					Left:f64::from(Target.Left) / Scale,
-					Top:f64::from(Target.Top) / Scale,
-					Width:f64::from(Target.Width) / Scale,
-					Height:f64::from(Target.Height) / Scale,
-					Radius:f64::from(Target.Radius) / Scale,
+					LeftPct:f64::from(Target.Left) / OverlayW * 100.0,
+					TopPct:f64::from(Target.Top) / OverlayH * 100.0,
+					WidthPct:f64::from(Target.Width) / OverlayW * 100.0,
+					HeightPct:f64::from(Target.Height) / OverlayH * 100.0,
+					WidthPx:Target.Width,
+					HeightPx:Target.Height,
+					RadiusPx:Target.Radius,
+					Scale,
 				},
 			},
 		);

@@ -8,15 +8,23 @@ export type Mode = "dark" | "light";
 /** Which monitor edge an independent rounded taskbar currently occupies. */
 export type TaskbarEdge = "none" | "bottom" | "top" | "left" | "right";
 
-/** Anti-aliased taskbar overlay frame in logical pixels relative to this monitor. */
+/**
+ * Anti-aliased taskbar overlay frame in DPI-independent viewport percentages
+ * (`LeftPct/TopPct/WidthPct/HeightPct`) paired with exact physical pixel
+ * geometry (`WidthPx/HeightPx/RadiusPx`) so the SVG rim stays locked 1:1 to
+ * the Win32 `CreateRoundRectRgn` clip across all DPIs, text scales, and hotplugs.
+ */
 export type TaskbarFrame = {
 	Visible: boolean;
 	Edge?: TaskbarEdge;
-	Left: number;
-	Top: number;
-	Width: number;
-	Height: number;
-	Radius: number;
+	LeftPct: number;
+	TopPct: number;
+	WidthPct: number;
+	HeightPct: number;
+	WidthPx: number;
+	HeightPx: number;
+	RadiusPx: number;
+	Scale: number;
 };
 
 /** What the Rust side injects as `window.settings` before the first paint. */
@@ -65,7 +73,7 @@ export type MaximizedMessage = {
 	message: { Maximized: boolean };
 };
 
-/** `listen("work_inset", ...)` payload: `Message::WorkInset`. */
+/** `listen("work_inset", ...)` payload: `Message::WorkInset` (viewport percentages). */
 export type WorkInsetMessage = {
 	message: { WorkInset: { Left: number; Right: number; Bottom: number } };
 };

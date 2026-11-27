@@ -1,32 +1,38 @@
 import "../Asset/CSS/Corner.css";
 
 export type TaskbarRimProperty = {
-	left: number;
-	top: number;
-	width: number;
-	height: number;
-	radius: number;
+	leftPct: number;
+	topPct: number;
+	widthPct: number;
+	heightPct: number;
+	widthPx: number;
+	heightPx: number;
+	radiusPx: number;
+	scale: number;
 };
 
 /**
- * Hardware-anti-aliased macOS 26 Liquid Glass rim aligned directly over the
- * clipped Windows taskbar (`Shell_TrayWnd` / `Shell_SecondaryTrayWnd`).
+ * Hardware-anti-aliased macOS 26 Liquid Glass rim aligned 1:1 in physical
+ * pixels directly over the clipped Windows taskbar (`Shell_TrayWnd` /
+ * `Shell_SecondaryTrayWnd`).
  *
- * Windows GDI `SetWindowRgn` clips on a 1-bit pixel grid, leaving stair-step
- * aliasing at the four rounded corners. Drawing a sub-pixel anti-aliased SVG
- * double-rim (outer seam feather + inner specular refraction highlight) directly
- * over the clipped boundary smooths the jagged pixels and gives the taskbar a
- * cohesive Liquid Glass floating-dock edge.
+ * Positioning uses viewport percentages (`left/top/width/height` in `%`) while
+ * the SVG `viewBox` uses exact physical pixels (`0 0 widthPx heightPx`) with
+ * `rx = radiusPx`, making alignment completely immune to `devicePixelRatio`,
+ * fractional DPI, Windows text scaling, and cross-DPI monitor hotplug drift.
  */
 export default (Property: TaskbarRimProperty) => {
-	const Width = () => Math.max(2, Property.width);
-	const Height = () => Math.max(2, Property.height);
-	const Radius = () => Math.min(Property.radius, Math.min(Width(), Height()) / 2);
+	const Width = () => Math.max(2, Property.widthPx);
+	const Height = () => Math.max(2, Property.heightPx);
+	const Scale = () => Math.max(1, Property.scale || 1);
+	const Radius = () => Math.min(Property.radiusPx, Math.min(Width(), Height()) / 2);
+	const OuterInset = () => 0.35 * Scale();
+	const InnerInset = () => 0.9 * Scale();
 
 	return (
 		<div
 			class="TaskbarRim"
-			style={`left: ${Property.left}px; top: ${Property.top}px; width: ${Width()}px; height: ${Height()}px;`}>
+			style={`left: ${Property.leftPct}%; top: ${Property.topPct}%; width: ${Property.widthPct}%; height: ${Property.heightPct}%;`}>
 			<svg
 				class="TaskbarRim-Svg"
 				viewBox={`0 0 ${Width()} ${Height()}`}
@@ -41,22 +47,24 @@ export default (Property: TaskbarRimProperty) => {
 				</defs>
 				<rect
 					class="TaskbarRim-Outer"
-					x="0.35"
-					y="0.35"
-					width={Math.max(0, Width() - 0.7)}
-					height={Math.max(0, Height() - 0.7)}
+					x={OuterInset()}
+					y={OuterInset()}
+					width={Math.max(0, Width() - OuterInset() * 2)}
+					height={Math.max(0, Height() - OuterInset() * 2)}
 					rx={Radius()}
 					ry={Radius()}
+					stroke-width={1.4 * Scale()}
 				/>
 				<rect
 					class="TaskbarRim-Specular"
-					x="0.9"
-					y="0.9"
-					width={Math.max(0, Width() - 1.8)}
-					height={Math.max(0, Height() - 1.8)}
-					rx={Math.max(0, Radius() - 0.55)}
-					ry={Math.max(0, Radius() - 0.55)}
+					x={InnerInset()}
+					y={InnerInset()}
+					width={Math.max(0, Width() - InnerInset() * 2)}
+					height={Math.max(0, Height() - InnerInset() * 2)}
+					rx={Math.max(0, Radius() - 0.55 * Scale())}
+					ry={Math.max(0, Radius() - 0.55 * Scale())}
 					stroke="url(#radius-tb-specular)"
+					stroke-width={1.1 * Scale()}
 				/>
 			</svg>
 		</div>
