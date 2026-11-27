@@ -4,11 +4,11 @@ import type { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Locate from "./Locate.js";
 
 /** The width the panel is drawn at, in logical pixels - matches `Menu::Width`. */
-const Width = 364;
+const Width = 368;
 
 /** Transparent shadow margin on every side so the macOS 26 Liquid Glass ambient
  *  elevation shadow fades smoothly with zero window-edge clipping. */
-const Margin = 14;
+const Margin = 16;
 
 /** Logical pixels of work area kept clear of the panel: anchor gap + vertical margins. */
 const Reserve = 6 + 2 * Margin;

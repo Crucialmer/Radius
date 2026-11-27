@@ -26,8 +26,12 @@ export default (Property: TaskbarRimProperty) => {
 	const Height = () => Math.max(2, Property.heightPx);
 	const Scale = () => Math.max(1, Property.scale || 1);
 	const Radius = () => Math.min(Property.radiusPx, Math.min(Width(), Height()) / 2);
-	const OuterInset = () => 0.35 * Scale();
-	const InnerInset = () => 0.85 * Scale();
+	const OuterWidth = () => 1.0 * Scale();
+	const OuterInset = () => OuterWidth() / 2;
+	const OuterRadius = () => Math.max(0, Radius() - OuterInset());
+	const InnerWidth = () => 0.75 * Scale();
+	const InnerInset = () => OuterWidth() - InnerWidth() / 2 + 0.25 * Scale();
+	const InnerRadius = () => Math.max(0, Radius() - InnerInset());
 
 	return (
 		<div
@@ -51,9 +55,9 @@ export default (Property: TaskbarRimProperty) => {
 					y={OuterInset()}
 					width={Math.max(0, Width() - OuterInset() * 2)}
 					height={Math.max(0, Height() - OuterInset() * 2)}
-					rx={Radius()}
-					ry={Radius()}
-					stroke-width={1.25 * Scale()}
+					rx={OuterRadius()}
+					ry={OuterRadius()}
+					stroke-width={OuterWidth()}
 				/>
 				<rect
 					class="TaskbarRim-Specular"
@@ -61,10 +65,10 @@ export default (Property: TaskbarRimProperty) => {
 					y={InnerInset()}
 					width={Math.max(0, Width() - InnerInset() * 2)}
 					height={Math.max(0, Height() - InnerInset() * 2)}
-					rx={Math.max(0, Radius() - 0.5 * Scale())}
-					ry={Math.max(0, Radius() - 0.5 * Scale())}
+					rx={InnerRadius()}
+					ry={InnerRadius()}
 					stroke="url(#radius-tb-specular)"
-					stroke-width={1.0 * Scale()}
+					stroke-width={InnerWidth()}
 				/>
 			</svg>
 		</div>

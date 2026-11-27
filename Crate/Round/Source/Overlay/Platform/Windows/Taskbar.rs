@@ -123,8 +123,10 @@ pub fn InvalidateAll() {
 	}
 }
 
-/// Return the actual physical Win32 rectangle of one monitor's overlay window,
-/// falling back to `Fallback` if the window is not yet created.
+/// Return the actual physical Win32 client-viewport rectangle of one monitor's
+/// overlay window in screen coordinates (falling back to `GetWindowRect` and
+/// then `Fallback`) so CSS `(0%, 0%)` aligns 1:1 with physical pixels even if
+/// Windows attaches any non-client frame offset.
 #[cfg(target_os = "windows")]
 pub fn OverlayRect<R:Runtime>(
 	App:&AppHandle<R>,
@@ -132,8 +134,9 @@ pub fn OverlayRect<R:Runtime>(
 	Fallback:windows_sys::Win32::Foundation::RECT,
 ) -> windows_sys::Win32::Foundation::RECT {
 	use windows_sys::Win32::{
-		Foundation::{HWND, RECT},
-		UI::WindowsAndMessaging::{GetWindowRect, IsWindow},
+		Foundation::{HWND, POINT, RECT},
+		Graphics::Gdi::ClientToScreen,
+		UI::WindowsAndMessaging::{GetClientRect, GetWindowRect, IsWindow},
 	};
 
 	if let Some(Window) = App.get_webview_window(Label)
@@ -142,6 +145,22 @@ pub fn OverlayRect<R:Runtime>(
 		let Hwnd = Raw.0 as HWND;
 
 		if !Hwnd.is_null() && unsafe { IsWindow(Hwnd) } != 0 {
+			let mut Client = RECT { left:0, top:0, right:0, bottom:0 };
+
+			let mut Origin = POINT { x:0, y:0 };
+
+			if unsafe { GetClientRect(Hwnd, &mut Client) != 0 && ClientToScreen(Hwnd, &mut Origin) != 0 }
+				&& Client.right > Client.left
+				&& Client.bottom > Client.top
+			{
+				return RECT {
+					left:Origin.x,
+					top:Origin.y,
+					right:Origin.x + (Client.right - Client.left),
+					bottom:Origin.y + (Client.bottom - Client.top),
+				};
+			}
+
 			let mut Rect = RECT { left:0, top:0, right:0, bottom:0 };
 
 			if unsafe { GetWindowRect(Hwnd, &mut Rect) } != 0 && Rect.right > Rect.left && Rect.bottom > Rect.top {
@@ -399,11 +418,15 @@ fn MeasureBounds(
 
 	// Reconcile with `rcWork`: when a small taskbar shrinks the reserved work area
 	// while the outer `Shell_TrayWnd` host keeps its default 48dp height, trim the
-	// transparent dead strip above/beside the small taskbar.
+	// transparent dead strip above/beside the small taskbar. Require a real >= 6dp
+	// step so minor 1-4px work-area rounding never chops off the top of a normal
+	// taskbar and shifts the rounded rim downward.
+	let WorkTrimMin = (6.0 * Scale).round().max(6.0) as i32;
+
 	if Horizontal {
 		if Vis.bottom >= MonRect.bottom - EdgeSnap && Vis.top > MonRect.top + EdgeSnap {
 			if WorkRect.bottom < MonRect.bottom - AutoHideTol
-				&& WorkRect.bottom > Vis.top
+				&& WorkRect.bottom >= Vis.top + WorkTrimMin
 				&& WorkRect.bottom < Vis.bottom - MinThick
 			{
 				Vis.top = WorkRect.bottom;
@@ -423,20 +446,20 @@ fn MeasureBounds(
 		} else if Vis.top <= MonRect.top + EdgeSnap
 			&& Vis.bottom < MonRect.bottom - EdgeSnap
 			&& WorkRect.top > MonRect.top + AutoHideTol
-			&& WorkRect.top < Vis.bottom
+			&& WorkRect.top <= Vis.bottom - WorkTrimMin
 			&& WorkRect.top > Vis.top + MinThick
 		{
 			Vis.bottom = WorkRect.top;
 		}
 	} else if Vis.left <= MonRect.left + EdgeSnap
 		&& WorkRect.left > MonRect.left + AutoHideTol
-		&& WorkRect.left < Vis.right
+		&& WorkRect.left <= Vis.right - WorkTrimMin
 		&& WorkRect.left > Vis.left + MinThick
 	{
 		Vis.right = WorkRect.left;
 	} else if Vis.right >= MonRect.right - EdgeSnap
 		&& WorkRect.right < MonRect.right - AutoHideTol
-		&& WorkRect.right > Vis.left
+		&& WorkRect.right >= Vis.left + WorkTrimMin
 		&& WorkRect.right < Vis.right - MinThick
 	{
 		Vis.left = WorkRect.right;
