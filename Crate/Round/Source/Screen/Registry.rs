@@ -1,16 +1,28 @@
-//! The monitor set this launch resolved, kept for every command to read.
+//! The live monitor set kept in sync across display hotplugs for every command
+//! and watcher to read.
 //!
-//! Resolved once, when the overlay windows are built, and read afterwards by
-//! every command. That is not an optimisation. A label is unique only within a
-//! set, so re-enumerating per command could resolve a label the windows do not
-//! carry - which is exactly the drift that let a per-monitor write land on a key
-//! no window read. One set, resolved once, is the invariant.
-//!
-//! It also makes the command layer testable: a mock runtime has no displays, so a
-//! test seeds this instead.
+//! A label is unique only within a set, so commands read from this shared
+//! snapshot rather than re-enumerating ad hoc; when Windows notifies us of a
+//! display change, [`crate::Overlay::Sync::Reconcile`] replaces the set
+//! atomically alongside rebuilding/repositioning the overlay windows.
+
+use std::sync::RwLock;
 
 use crate::Screen::Struct::Struct as Screen;
 
-/// The set every command reads a monitor's label from.
-#[derive(Clone, Default)]
-pub struct Struct(pub Vec<Screen>);
+/// Thread-safe live set of resolved monitors.
+#[derive(Default)]
+pub struct Struct(RwLock<Vec<Screen>>);
+
+impl Struct {
+	/// Create a registry seeded with `Screens`.
+	pub fn New(Screens:Vec<Screen>) -> Self { Self(RwLock::new(Screens)) }
+
+	/// Return an owned snapshot of the current monitor list.
+	pub fn Snapshot(&self) -> Vec<Screen> { self.0.read().unwrap_or_else(|Poisoned| Poisoned.into_inner()).clone() }
+
+	/// Replace the active monitor list atomically after a display topology change.
+	pub fn Replace(&self, Screens:Vec<Screen>) {
+		*self.0.write().unwrap_or_else(|Poisoned| Poisoned.into_inner()) = Screens;
+	}
+}

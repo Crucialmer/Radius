@@ -33,7 +33,7 @@ pub fn State<R:Runtime>(App:AppHandle<R>) -> Result<State, String> {
 	// naming a monitor no window answers to.
 	let Screens = App
 		.try_state::<Registry::Struct>()
-		.map(|Held| Held.0.clone())
+		.map(|Held| Held.Snapshot())
 		.unwrap_or_default();
 
 	let Preferences = SettingsLoad::Fn(&Storage, &Screens);

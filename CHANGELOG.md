@@ -4,6 +4,18 @@
 
 ---
 
+## 1.1.3
+
+### 修复
+
+- **修复拔下外接显示器后软件崩溃与任务栏圆角框虚影移位的 Bug**：
+  - 新增隐藏顶层窗口实时监听 Windows 显示拓扑变更广播（`WM_DISPLAYCHANGE` / `WM_SETTINGCHANGE`）及显示器几何+DPI 指纹巡检，拔插外接显示器、切换扩展/仅主屏或更改缩放时自动防抖并在主线程动态同步（`Overlay::Sync::Reconcile`）：干净销毁已断开显示器的覆盖层窗口、为新接入显示器自动创建覆盖层，并将保留的显示器覆盖层精确重定位到最新物理坐标与分辨率。
+  - 修复 `MonitorFromPoint` 使用 `MONITOR_DEFAULTTONEAREST` 导致已拔掉的外接屏错误映射到笔记本主屏、产生重影/移位任务栏圆角描边框的问题，改为严格校验 `MONITOR_DEFAULTTONULL` 与实时显示器尺寸一致性。
+  - 将后台监听线程中的跨线程 Tauri `scale_factor` / `is_visible` 调用改为纯 Win32 `GetDpiForWindow` / `IsWindow` / `IsWindowVisible`，并在 `WM_DISPLAYCHANGE` 过渡期间暂停窗口操作、拦截非主动退出的 `ExitRequested` 事件，彻底消除外接屏热拔插崩溃。
+  - 覆盖层前端新增 `resize` 防抖回拉（`overlay_ready`），显示器尺寸或 DPI 变更后自动刷新任务栏玻璃描边与工作区圆角坐标。
+
+---
+
 ## 1.1.2
 
 ### 修复

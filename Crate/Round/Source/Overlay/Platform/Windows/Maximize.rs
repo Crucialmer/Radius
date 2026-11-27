@@ -39,6 +39,15 @@ pub fn Invalidate(Label:&str) {
 	}
 }
 
+/// Clear all cached per-monitor state after a display topology change.
+pub fn InvalidateAll() {
+	let mut Guard = Cache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+
+	if let Some(Map) = Guard.as_mut() {
+		Map.clear();
+	}
+}
+
 #[cfg(target_os = "windows")]
 const fn EncodeWide<const N: usize>(Bytes:&[u8; N]) -> [u16; N] {
 	let mut Out = [0u16; N];
@@ -65,14 +74,14 @@ const IgnoredClasses:&[&[u16]] = &[
 /// Inspect top-level windows per monitor, anchor maximized bottom corners to
 /// the actual rendered bottom edge of the topmost maximized window (staying
 /// exact across standard, small, compact, floating, and auto-hidden taskbars),
-/// and return per-monitor fullscreen/bottom reports.
+/// and return `(Reports, TopologyDrifted)`.
 #[cfg(target_os = "windows")]
 pub fn Refresh<R:Runtime>(
 	App:&AppHandle<R>,
 	Screens:&[Screen],
 	MaximizeEnabled:bool,
 	TrackFullscreen:bool,
-) -> HashMap<String, MonitorReport> {
+) -> (HashMap<String, MonitorReport>, bool) {
 	use std::ffi::c_void;
 
 	use windows_sys::Win32::{
@@ -203,8 +212,13 @@ pub fn Refresh<R:Runtime>(
 
 	let mut Reports = HashMap::with_capacity(Screens.len());
 
+	let mut Drifted = false;
+
 	for Item in Screens {
-		let (MonRect, WorkRect) = Taskbar::MonitorRects(Item);
+		let Some((MonRect, WorkRect)) = Taskbar::MonitorRects(Item) else {
+			Drifted = true;
+			continue;
+		};
 
 		let Scale = Taskbar::LiveScale(App, Item);
 
@@ -342,7 +356,7 @@ pub fn Refresh<R:Runtime>(
 		Map.insert(Item.Label.clone(), NextState);
 	}
 
-	Reports
+	(Reports, Drifted)
 }
 
 /// Non-Windows fallback.
@@ -352,6 +366,6 @@ pub fn Refresh<R:Runtime>(
 	_Screens:&[Screen],
 	_MaximizeEnabled:bool,
 	_TrackFullscreen:bool,
-) -> HashMap<String, MonitorReport> {
-	HashMap::new()
+) -> (HashMap<String, MonitorReport>, bool) {
+	(HashMap::new(), false)
 }

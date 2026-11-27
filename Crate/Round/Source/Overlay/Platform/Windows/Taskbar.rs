@@ -81,18 +81,39 @@ const SecondaryClass:[u16; 23] = EncodeWide(b"Shell_SecondaryTrayWnd\0");
 #[cfg(target_os = "windows")]
 const BridgeClass:[u16; 50] = EncodeWide(b"Windows.UI.Composition.DesktopWindowContentBridge\0");
 
-/// Read the live scale factor for one monitor's overlay window, falling back to
-/// the startup snapshot if the window is not yet built.
+/// Read the live scale factor for one monitor's overlay window directly via Win32
+/// `GetDpiForWindow` (avoiding cross-thread Tauri/Tao calls during display hotplugs),
+/// falling back to the reconciled `ScreenItem.ScaleFactor`.
+#[cfg(target_os = "windows")]
 pub fn LiveScale<R:Runtime>(App:&AppHandle<R>, ScreenItem:&Screen) -> f64 {
-	App.get_webview_window(ScreenItem.Label.as_str())
-		.and_then(|Window| Window.scale_factor().ok())
-		.filter(|Factor| *Factor > 0.0)
-		.unwrap_or(ScreenItem.ScaleFactor)
-		.max(1.0)
+	use windows_sys::Win32::{
+		Foundation::HWND,
+		UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::IsWindow},
+	};
+
+	if let Some(Window) = App.get_webview_window(ScreenItem.Label.as_str())
+		&& let Ok(Raw) = Window.hwnd()
+	{
+		let Hwnd = Raw.0 as HWND;
+
+		if !Hwnd.is_null() && unsafe { IsWindow(Hwnd) } != 0 {
+			let Dpi = unsafe { GetDpiForWindow(Hwnd) };
+
+			if Dpi >= 96 {
+				return (f64::from(Dpi) / 96.0).max(1.0);
+			}
+		}
+	}
+
+	ScreenItem.ScaleFactor.max(1.0)
 }
 
+/// Non-Windows fallback.
+#[cfg(not(target_os = "windows"))]
+pub fn LiveScale<R:Runtime>(_App:&AppHandle<R>, ScreenItem:&Screen) -> f64 { ScreenItem.ScaleFactor.max(1.0) }
+
 /// Clear the cached rim frame for one monitor so the next sync re-emits its
-/// current geometry (used when an overlay finishes mounting).
+/// current geometry (used when an overlay finishes mounting or is removed).
 pub fn InvalidateFrame(Label:&str) {
 	let mut Guard = FrameCache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
 
@@ -101,15 +122,29 @@ pub fn InvalidateFrame(Label:&str) {
 	}
 }
 
-/// Query live physical `(rcMonitor, rcWork)` for `ScreenItem`, falling back to
-/// its startup physical rect if the monitor lookup fails.
+/// Clear all cached taskbar clip entries and rim frames so display hotplugs
+/// cleanly re-clip surviving taskbars and push fresh rim coordinates.
+pub fn InvalidateAll() {
+	let mut ClipGuard = Cache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+	ClipGuard.clear();
+	drop(ClipGuard);
+
+	let mut FrameGuard = FrameCache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
+	if let Some(Map) = FrameGuard.as_mut() {
+		Map.clear();
+	}
+}
+
+/// Query live physical `(rcMonitor, rcWork)` for `ScreenItem` using
+/// `MONITOR_DEFAULTTONULL` so a disconnected external monitor returns `None`
+/// instead of silently aliasing onto the surviving laptop display.
 #[cfg(target_os = "windows")]
 pub fn MonitorRects(
 	ScreenItem:&Screen,
-) -> (windows_sys::Win32::Foundation::RECT, windows_sys::Win32::Foundation::RECT) {
+) -> Option<(windows_sys::Win32::Foundation::RECT, windows_sys::Win32::Foundation::RECT)> {
 	use windows_sys::Win32::{
-		Foundation::{POINT, RECT},
-		Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
+		Foundation::POINT,
+		Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromPoint},
 	};
 
 	let Center = POINT {
@@ -118,25 +153,38 @@ pub fn MonitorRects(
 	};
 
 	unsafe {
-		let Hmon = MonitorFromPoint(Center, MONITOR_DEFAULTTONEAREST);
+		let Hmon = MonitorFromPoint(Center, MONITOR_DEFAULTTONULL);
+
+		if Hmon.is_null() {
+			return None;
+		}
 
 		let mut Info:MONITORINFO = std::mem::zeroed();
 
 		Info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
 
-		if !Hmon.is_null() && GetMonitorInfoW(Hmon, &mut Info) != 0 {
-			return (Info.rcMonitor, Info.rcWork);
+		if GetMonitorInfoW(Hmon, &mut Info) == 0 {
+			return None;
 		}
+
+		// Verify the live monitor still matches this screen's position & dimensions;
+		// if a display hotplug shifted coordinates or changed resolution, return None
+		// so the watcher triggers a clean main-thread reconcile instead of painting
+		// shifted rims into a stale-sized overlay window.
+		let MonW = Info.rcMonitor.right - Info.rcMonitor.left;
+
+		let MonH = Info.rcMonitor.bottom - Info.rcMonitor.top;
+
+		if (Info.rcMonitor.left - ScreenItem.PhysicalX).abs() > 2
+			|| (Info.rcMonitor.top - ScreenItem.PhysicalY).abs() > 2
+			|| (MonW - ScreenItem.Pixels.0).abs() > 2
+			|| (MonH - ScreenItem.Pixels.1).abs() > 2
+		{
+			return None;
+		}
+
+		Some((Info.rcMonitor, Info.rcWork))
 	}
-
-	let Fallback = RECT {
-		left:ScreenItem.PhysicalX,
-		top:ScreenItem.PhysicalY,
-		right:ScreenItem.PhysicalX + ScreenItem.Pixels.0,
-		bottom:ScreenItem.PhysicalY + ScreenItem.Pixels.1,
-	};
-
-	(Fallback, Fallback)
 }
 
 #[cfg(target_os = "windows")]
@@ -408,7 +456,9 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 
 	let Scale = ScreenItem.ScaleFactor.max(1.0);
 
-	let (MonRect, WorkRect) = MonitorRects(ScreenItem);
+	let Some((MonRect, WorkRect)) = MonitorRects(ScreenItem) else {
+		return Frame::default();
+	};
 
 	for Hwnd in FindVisible() {
 		let Some((_, Vis)) = MeasureBounds(Hwnd, &MonRect, &WorkRect, None, Scale) else {
@@ -467,12 +517,14 @@ pub fn Apply<R:Runtime>(
 
 	let Taskbars = FindVisible();
 
+	// Only include monitors that still exist at their registered bounds so an
+	// unplugged monitor can never alias onto a surviving display's taskbar.
 	let MonitorInfo:Vec<(&Screen, RECT, RECT, f64)> = Screens
 		.iter()
-		.map(|Item| {
-			let (MonRect, WorkRect) = MonitorRects(Item);
+		.filter_map(|Item| {
+			let (MonRect, WorkRect) = MonitorRects(Item)?;
 
-			(Item, MonRect, WorkRect, LiveScale(App, Item))
+			Some((Item, MonRect, WorkRect, LiveScale(App, Item)))
 		})
 		.collect();
 

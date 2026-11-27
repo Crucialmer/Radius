@@ -5,15 +5,12 @@
 //! The `round` binary: one overlay webview per monitor, then the tray icon.
 
 use pround::{
-	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform},
-	Per::Of as PerOf,
+	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform, Sync as OverlaySync},
 	Screen::{All as ScreenAll, Registry},
-	Settings::{Load as SettingsLoad, Save as SettingsSave, Script, Store::Fn as StorePath},
+	Settings::{Load as SettingsLoad, Save as SettingsSave, Store::Fn as StorePath},
 	Tray::Install,
-	Visibility::{Apply as VisibilityApply, Enum::Enum as Visibility},
-	Window::Chrome,
 };
-use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
 fn main() {
@@ -48,10 +45,9 @@ fn main() {
 
 			let Screens = ScreenAll::Fn(&Devices);
 
-			// The one set every command will read a label from. Resolved here,
-			// beside the windows it names, so a command can never disagree with
-			// them about which monitor carries which label.
-			App.manage(Registry::Struct(Screens.clone()));
+			// The one live set every command reads a label from. Updated
+			// atomically on display hotplug by `Overlay::Sync::Reconcile`.
+			App.manage(Registry::Struct::New(Screens.clone()));
 
 			App.manage(pround::Update::Store::Struct::default());
 
@@ -67,60 +63,9 @@ fn main() {
 			// before any window exists.
 			Platform::Dock(Preferences.Dock);
 
-			Screens.iter().try_for_each(|Screen| {
-				pround::Trace!(
-					"window {} radius={:?} ink={:?}",
-					Screen.Label,
-					pround::Per::Of::Fn(&Preferences.Radius, &Screen.Label),
-					pround::Per::Of::Fn(&Preferences.Ink, &Screen.Label)
-				);
-
-				// Per monitor: the script carries the radius, ink and work-area insets
-				// THIS window should draw, so a tuned monitor paints correctly before
-				// any event.
-				let Script = Script::Fn(&Preferences, Screen);
-
-				let Width = u32::try_from(Screen.Pixels.0).unwrap_or(0);
-
-				let Height = u32::try_from(Screen.Pixels.1).unwrap_or(0);
-
-				let Builder = Chrome::Fn(
-					WebviewWindowBuilder::new(App, &Screen.Label, WebviewUrl::App("index.html".into())),
-					"",
-				)
-				.accept_first_mouse(false)
-				.focused(false)
-				.fullscreen(false)
-				.initialization_script(&Script)
-				.inner_size(Screen.Width.into(), Screen.Height.into())
-				.maximized(false)
-				.position(Screen.X.into(), Screen.Y.into())
-				.disable_drag_drop_handler();
-
-				// Windows draws its own shadow under a transparent window, which
-				// is a grey halo around corners that are meant to be the only
-				// edge on screen.
-				#[cfg(target_os = "windows")]
-				let Builder = Builder.shadow(false);
-
-				let Window = Builder.build()?;
-
-				// Snap to exact physical monitor coordinates and dimensions to
-				// eliminate fractional-DPI rounding gaps up to 8K displays.
-				Window.set_position(PhysicalPosition::new(Screen.PhysicalX, Screen.PhysicalY))?;
-
-				Window.set_size(PhysicalSize::new(Width, Height))?;
-
-				Platform::Art(&Window);
-
-				let WindowVis = match PerOf::Fn(&Preferences.Visible, &Screen.Label) {
-					Visibility::Shown => Visibility::Shown,
-					Visibility::Hidden if Preferences.TaskbarRounded => Visibility::Shown,
-					Visibility::Hidden => Visibility::Hidden,
-				};
-
-				VisibilityApply::Fn(WindowVis, &Window)
-			})?;
+			Screens
+				.iter()
+				.try_for_each(|Screen| OverlaySync::BuildOverlay(App.handle(), &Preferences, Screen).map(|_| ()))?;
 
 			Install::Fn(App.handle())?;
 
@@ -132,9 +77,16 @@ fn main() {
 		})
 		.build(tauri::generate_context!())
 		.expect("Cannot launch Radius.")
-		.run(|_App, Event| {
-			if let tauri::RunEvent::Exit = Event {
+		.run(|_App, Event| match Event {
+			// Closing an orphaned overlay window during external-monitor unplug
+			// must never terminate the tray application; only explicit `App.exit(0)`
+			// (`code.is_some()`) from Quit or the self-updater exits the process.
+			tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
+				api.prevent_exit();
+			}
+			tauri::RunEvent::Exit => {
 				pround::Overlay::Platform::Taskbar::Restore();
 			}
+			_ => {}
 		});
 }

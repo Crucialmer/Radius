@@ -23,7 +23,7 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> Result<Settings, String> {
 
 	let Screens = App
 		.try_state::<Registry::Struct>()
-		.map(|Held| Held.0.clone())
+		.map(|Held| Held.Snapshot())
 		.unwrap_or_default();
 
 	Ok(SettingsLoad::Fn(&Storage, &Screens))

@@ -32,7 +32,7 @@ fn App() -> (tauri::App<MockRuntime>, tauri::WebviewWindow<MockRuntime>) {
 
 	// The set a launch resolves, seeded by hand: a mock runtime has no displays,
 	// and the command layer reads exactly this.
-	App.manage(pround::Screen::Registry::Struct(vec![
+	App.manage(pround::Screen::Registry::Struct::New(vec![
 		Screen("Monitor26344", "Monitor #26344", 3328, 1872),
 		Screen("Monitor22763", "Monitor #22763", 1800, 3200),
 	]));

@@ -124,8 +124,28 @@ function Overlay() {
 			}
 		});
 
+		let ResizeTimer: number | undefined;
+
+		const OnResize = () => {
+			if (ResizeTimer !== undefined) {
+				window.clearTimeout(ResizeTimer);
+			}
+
+			ResizeTimer = window.setTimeout(() => {
+				if (!Disposed) {
+					void invoke("overlay_ready");
+				}
+			}, 150);
+		};
+
+		window.addEventListener("resize", OnResize);
+
 		onCleanup(() => {
 			Disposed = true;
+			if (ResizeTimer !== undefined) {
+				window.clearTimeout(ResizeTimer);
+			}
+			window.removeEventListener("resize", OnResize);
 			Unlisten.forEach((Off) => Off());
 		});
 	});
