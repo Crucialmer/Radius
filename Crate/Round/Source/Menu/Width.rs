@@ -1,2 +1,2 @@
-/// The panel's width in logical pixels, before the webview measures its content.
-pub const Const:f64 = 356.0;
+/// The panel's width in logical pixels (336 content + 2 * 14 shadow margin).
+pub const Const:f64 = 364.0;

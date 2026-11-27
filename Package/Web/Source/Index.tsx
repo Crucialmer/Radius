@@ -82,7 +82,10 @@ function Overlay() {
 		return AllCorners;
 	};
 
-	const ShowMaxCorners = () => ScreenVisible() && MaximizeCorners() && Maximized() && WorkInset().Bottom > 0.1;
+	const ShowScreenCorners = () => ScreenVisible() && Radius() > 0;
+
+	const ShowMaxCorners = () =>
+		ScreenVisible() && Radius() > 0 && MaximizeCorners() && Maximized() && WorkInset().Bottom > 0.1;
 
 	const ShowTaskbarRim = () =>
 		Taskbar().Visible && Taskbar().RadiusPx > 0 && Taskbar().WidthPx > 2 && Taskbar().HeightPx > 2;
@@ -161,7 +164,7 @@ function Overlay() {
 			data-mode={Mode()}
 			data-max-corners={ShowMaxCorners() ? "true" : "false"}
 			style={`--Corner: ${Radius()}px; --WorkLeft: ${WorkInset().Left}vw; --WorkRight: ${WorkInset().Right}vw; --WorkBottom: ${WorkInset().Bottom}vh`}>
-			<Show when={ScreenVisible()}>
+			<Show when={ShowScreenCorners()}>
 				<For each={ActiveScreenCorners()}>{(corner) => <Corner id={corner} />}</For>
 			</Show>
 			<Show when={ShowMaxCorners()}>

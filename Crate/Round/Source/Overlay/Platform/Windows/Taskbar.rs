@@ -221,6 +221,7 @@ pub fn MonitorRects(
 fn DetectEdge(
 	Rect:&windows_sys::Win32::Foundation::RECT,
 	MonRect:&windows_sys::Win32::Foundation::RECT,
+	Scale:f64,
 ) -> &'static str {
 	let Width = Rect.right - Rect.left;
 
@@ -230,15 +231,17 @@ fn DetectEdge(
 
 	let MonH = (MonRect.bottom - MonRect.top).max(1);
 
+	let EdgeTol = (4.0 * Scale).round().max(4.0) as i32;
+
 	if Width >= Height {
 		// Narrow floating docks do not occupy the monitor's left/right corners.
 		if Width < (MonW * 9) / 10 {
 			return "none";
 		}
 
-		if Rect.top <= MonRect.top + 4 && Rect.bottom < MonRect.bottom - 4 {
+		if Rect.top <= MonRect.top + EdgeTol && Rect.bottom < MonRect.bottom - EdgeTol {
 			"top"
-		} else if Rect.bottom >= MonRect.bottom - 4 {
+		} else if Rect.bottom >= MonRect.bottom - EdgeTol {
 			"bottom"
 		} else {
 			"none"
@@ -248,9 +251,9 @@ fn DetectEdge(
 			return "none";
 		}
 
-		if Rect.left <= MonRect.left + 4 {
+		if Rect.left <= MonRect.left + EdgeTol {
 			"left"
-		} else if Rect.right >= MonRect.right - 4 {
+		} else if Rect.right >= MonRect.right - EdgeTol {
 			"right"
 		} else {
 			"none"
@@ -323,16 +326,24 @@ fn MeasureBounds(
 
 	let mut VisH = Vis.bottom - Vis.top;
 
-	if VisW < 12 || VisH < 12 {
+	let MinThick = (14.0 * Scale).round().max(12.0) as i32;
+
+	let EdgeSnap = (8.0 * Scale).round().max(8.0) as i32;
+
+	let AutoHideTol = (4.0 * Scale).round().max(4.0) as i32;
+
+	let BridgeFlush = (2.0 * Scale).round().max(2.0) as i32;
+
+	if VisW < MinThick || VisH < MinThick {
 		return None;
 	}
 
 	// On Windows 11, only adopt a full-span XAML content bridge trim when it is
 	// flush with the docked screen edge and genuinely shorter by a real small-taskbar
-	// step (>= 8px), so minor 1-6px internal XAML insets never shift the rim off edge.
+	// step (>= 8dp), so minor 1-6px internal XAML insets never shift the rim off edge.
 	let Horizontal = VisW >= VisH;
 
-	let MinTrim = (8.0 * Scale).round() as i32;
+	let MinTrim = (8.0 * Scale).round().max(8.0) as i32;
 
 	unsafe {
 		let mut Child = FindWindowExW(Hwnd, ptr::null_mut(), BridgeClass.as_ptr(), ptr::null());
@@ -346,21 +357,33 @@ fn MeasureBounds(
 
 					let BridgeH = Bridge.bottom - Bridge.top;
 
-					if Horizontal && BridgeW >= (VisW * 9) / 10 && BridgeH >= 16 && VisH - BridgeH >= MinTrim {
-						if Vis.bottom >= MonRect.bottom - 8 && Bridge.bottom >= Vis.bottom - 2 && Bridge.top > Vis.top {
+					if Horizontal && BridgeW >= (VisW * 9) / 10 && BridgeH >= MinThick && VisH - BridgeH >= MinTrim {
+						if Vis.bottom >= MonRect.bottom - EdgeSnap
+							&& Bridge.bottom >= Vis.bottom - BridgeFlush
+							&& Bridge.top > Vis.top
+						{
 							Vis.top = Bridge.top;
 							VisH = Vis.bottom - Vis.top;
-						} else if Vis.top <= MonRect.top + 8 && Bridge.top <= Vis.top + 2 && Bridge.bottom < Vis.bottom
+						} else if Vis.top <= MonRect.top + EdgeSnap
+							&& Bridge.top <= Vis.top + BridgeFlush
+							&& Bridge.bottom < Vis.bottom
 						{
 							Vis.bottom = Bridge.bottom;
 							VisH = Vis.bottom - Vis.top;
 						}
-					} else if !Horizontal && BridgeH >= (VisH * 9) / 10 && BridgeW >= 16 && VisW - BridgeW >= MinTrim {
-						if Vis.left <= MonRect.left + 8 && Bridge.left <= Vis.left + 2 && Bridge.right < Vis.right {
+					} else if !Horizontal
+						&& BridgeH >= (VisH * 9) / 10
+						&& BridgeW >= MinThick
+						&& VisW - BridgeW >= MinTrim
+					{
+						if Vis.left <= MonRect.left + EdgeSnap
+							&& Bridge.left <= Vis.left + BridgeFlush
+							&& Bridge.right < Vis.right
+						{
 							Vis.right = Bridge.right;
 							VisW = Vis.right - Vis.left;
-						} else if Vis.right >= MonRect.right - 8
-							&& Bridge.right >= Vis.right - 2
+						} else if Vis.right >= MonRect.right - EdgeSnap
+							&& Bridge.right >= Vis.right - BridgeFlush
 							&& Bridge.left > Vis.left
 						{
 							Vis.left = Bridge.left;
@@ -378,8 +401,11 @@ fn MeasureBounds(
 	// while the outer `Shell_TrayWnd` host keeps its default 48dp height, trim the
 	// transparent dead strip above/beside the small taskbar.
 	if Horizontal {
-		if Vis.bottom >= MonRect.bottom - 8 && Vis.top > MonRect.top + 8 {
-			if WorkRect.bottom < MonRect.bottom - 4 && WorkRect.bottom > Vis.top && WorkRect.bottom < Vis.bottom - 12 {
+		if Vis.bottom >= MonRect.bottom - EdgeSnap && Vis.top > MonRect.top + EdgeSnap {
+			if WorkRect.bottom < MonRect.bottom - AutoHideTol
+				&& WorkRect.bottom > Vis.top
+				&& WorkRect.bottom < Vis.bottom - MinThick
+			{
 				Vis.top = WorkRect.bottom;
 			}
 
@@ -390,33 +416,33 @@ fn MeasureBounds(
 
 			if let Some(Bottom) = MaxBottom
 				&& Bottom >= Vis.top + SmallTaskbarDelta
-				&& Bottom < Vis.bottom - 12
+				&& Bottom < Vis.bottom - MinThick
 			{
 				Vis.top = Bottom;
 			}
-		} else if Vis.top <= MonRect.top + 8
-			&& Vis.bottom < MonRect.bottom - 8
-			&& WorkRect.top > MonRect.top + 4
+		} else if Vis.top <= MonRect.top + EdgeSnap
+			&& Vis.bottom < MonRect.bottom - EdgeSnap
+			&& WorkRect.top > MonRect.top + AutoHideTol
 			&& WorkRect.top < Vis.bottom
-			&& WorkRect.top > Vis.top + 12
+			&& WorkRect.top > Vis.top + MinThick
 		{
 			Vis.bottom = WorkRect.top;
 		}
-	} else if Vis.left <= MonRect.left + 8
-		&& WorkRect.left > MonRect.left + 4
+	} else if Vis.left <= MonRect.left + EdgeSnap
+		&& WorkRect.left > MonRect.left + AutoHideTol
 		&& WorkRect.left < Vis.right
-		&& WorkRect.left > Vis.left + 12
+		&& WorkRect.left > Vis.left + MinThick
 	{
 		Vis.right = WorkRect.left;
-	} else if Vis.right >= MonRect.right - 8
-		&& WorkRect.right < MonRect.right - 4
+	} else if Vis.right >= MonRect.right - EdgeSnap
+		&& WorkRect.right < MonRect.right - AutoHideTol
 		&& WorkRect.right > Vis.left
-		&& WorkRect.right < Vis.right - 12
+		&& WorkRect.right < Vis.right - MinThick
 	{
 		Vis.left = WorkRect.right;
 	}
 
-	if Vis.right - Vis.left < 12 || Vis.bottom - Vis.top < 12 {
+	if Vis.right - Vis.left < MinThick || Vis.bottom - Vis.top < MinThick {
 		return None;
 	}
 
@@ -443,7 +469,13 @@ pub fn BottomInsetOn(
 
 		let VisH = Vis.bottom - Vis.top;
 
-		if VisW >= VisH && VisW >= (MonW * 85) / 100 && Vis.bottom >= MonRect.bottom - 8 && Vis.top > MonRect.top + 8 {
+		let EdgeSnap = (8.0 * Scale).round().max(8.0) as i32;
+
+		if VisW >= VisH
+			&& VisW >= (MonW * 85) / 100
+			&& Vis.bottom >= MonRect.bottom - EdgeSnap
+			&& Vis.top > MonRect.top + EdgeSnap
+		{
 			return (MonRect.bottom - Vis.top).max(0);
 		}
 	}
@@ -513,7 +545,7 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 
 		return Frame {
 			Visible:Clamped > 0,
-			Edge:DetectEdge(&Vis, &MonRect),
+			Edge:DetectEdge(&Vis, &MonRect, Scale),
 			LeftPct:f64::from(Vis.left - MonRect.left) / MonW * 100.0,
 			TopPct:f64::from(Vis.top - MonRect.top) / MonH * 100.0,
 			WidthPct:f64::from(Width) / MonW * 100.0,
@@ -671,7 +703,7 @@ pub fn Apply<R:Runtime>(
 
 		let Covered = Reports.get(&Item.Label).is_some_and(|Report| Report.Fullscreen);
 
-		let Edge = if Covered { "none" } else { DetectEdge(&Vis, &MonRect) };
+		let Edge = if Covered { "none" } else { DetectEdge(&Vis, &MonRect, Scale) };
 
 		let Visible = Clamped > 0 && !Covered;
 

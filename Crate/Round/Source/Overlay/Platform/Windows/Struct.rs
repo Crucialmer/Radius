@@ -138,20 +138,39 @@ impl Trait for Struct {
 	/// ordering here - and it is applied after the scrims are up, so the panel is
 	/// on top however many times the panel has been opened.
 	fn Panel<R:Runtime>(Window:&WebviewWindow<R>) {
+		let _ = Window.set_shadow(false);
+
 		let Some(Native) = handle(Window) else {
 			return;
 		};
 
 		unsafe {
-			SetWindowPos(Native, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
 			let Corner:i32 = DWMWCP_DONOTROUND;
 
-			DwmSetWindowAttribute(
+			let _ = DwmSetWindowAttribute(
 				Native,
 				DWMWA_WINDOW_CORNER_PREFERENCE as u32,
 				&Corner as *const i32 as *const core::ffi::c_void,
 				std::mem::size_of::<i32>() as u32,
+			);
+
+			let NoBorder:u32 = DWMWA_COLOR_NONE;
+
+			let _ = DwmSetWindowAttribute(
+				Native,
+				DWMWA_BORDER_COLOR as u32,
+				&NoBorder as *const u32 as *const core::ffi::c_void,
+				std::mem::size_of::<u32>() as u32,
+			);
+
+			SetWindowPos(
+				Native,
+				HWND_TOPMOST,
+				0,
+				0,
+				0,
+				0,
+				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
 			);
 		}
 	}

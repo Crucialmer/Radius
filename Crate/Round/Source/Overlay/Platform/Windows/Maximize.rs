@@ -248,6 +248,10 @@ pub fn Refresh<R:Runtime>(
 		if NeedEnum {
 			let MaxBleed = (4.0 * Scale).round() as i32;
 
+			let FullTol = (2.0 * Scale).round().max(2.0) as i32;
+
+			let MinBottom = (3.0 * Scale).round().max(3.0) as i32;
+
 			for Candidate in &Windows {
 				let IntersectW =
 					(Candidate.Rect.right.min(MonRect.right) - Candidate.Rect.left.max(MonRect.left)).max(0);
@@ -261,10 +265,10 @@ pub fn Refresh<R:Runtime>(
 
 				// Fullscreen windows cover the taskbar as well; do not render work-area
 				// bottom masks or taskbar rims across fullscreen videos or games.
-				let CoversMonitor = Candidate.Rect.left <= MonRect.left + 2
-					&& Candidate.Rect.top <= MonRect.top + 2
-					&& Candidate.Rect.right >= MonRect.right - 2
-					&& Candidate.Rect.bottom >= MonRect.bottom - 2;
+				let CoversMonitor = Candidate.Rect.left <= MonRect.left + FullTol
+					&& Candidate.Rect.top <= MonRect.top + FullTol
+					&& Candidate.Rect.right >= MonRect.right - FullTol
+					&& Candidate.Rect.bottom >= MonRect.bottom - FullTol;
 
 				if CoversMonitor {
 					IsFullscreen = true;
@@ -291,7 +295,7 @@ pub fn Refresh<R:Runtime>(
 						// docked bottom taskbar and `rcWork` both agree on its height.
 						let EffectiveBottom = if EdgeTaskbarBottomPx > WinBottom
 							&& EdgeTaskbarBottomPx - WinBottom <= MaxBleed
-							&& (WorkBottomPx - EdgeTaskbarBottomPx).abs() <= 2
+							&& (WorkBottomPx - EdgeTaskbarBottomPx).abs() <= FullTol
 						{
 							EdgeTaskbarBottomPx
 						} else {
@@ -301,10 +305,10 @@ pub fn Refresh<R:Runtime>(
 						LeftPx = WinLeft;
 						RightPx = WinRight;
 						BottomPx = EffectiveBottom;
-						HasMaximized = EffectiveBottom > 2;
+						HasMaximized = EffectiveBottom > MinBottom;
 						MaxBottom = HasMaximized.then_some(MonRect.bottom - EffectiveBottom);
 					} else {
-						HasMaximized = BottomPx > 2;
+						HasMaximized = BottomPx > MinBottom;
 						MaxBottom = HasMaximized.then_some(MonRect.bottom - BottomPx);
 					}
 

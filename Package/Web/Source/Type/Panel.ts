@@ -54,5 +54,12 @@ export type Shared = {
 	Scope:() => string | undefined;
 };
 
-/** A work area, in logical pixels. */
-export type Work = { Top:number; Height:number; Scale:number };
+/** A work area in physical pixels plus its monitor DPI scale factor. */
+export type Work = {
+	LeftPx:number;
+	TopPx:number;
+	WidthPx:number;
+	HeightPx:number;
+	Height:number;
+	Scale:number;
+};

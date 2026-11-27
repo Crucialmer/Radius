@@ -1,25 +1,24 @@
-import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import type { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 import Locate from "./Locate.js";
 
-/** The width the panel is drawn at, in logical pixels - `Menu::Width`. */
-const Width = 356;
+/** The width the panel is drawn at, in logical pixels - matches `Menu::Width`. */
+const Width = 364;
 
-/** The transparent margin the window keeps around the panel, on each side,
- *  giving the macOS 26 Liquid Glass elevation shadow room without clipping. */
-const Margin = 10;
+/** Transparent shadow margin on every side so the macOS 26 Liquid Glass ambient
+ *  elevation shadow fades smoothly with zero window-edge clipping. */
+const Margin = 14;
 
-/** Logical pixels of the work area kept clear of the panel: the gap it hangs
- *  below the tray icon by, plus the margin above and below it. */
+/** Logical pixels of work area kept clear of the panel: anchor gap + vertical margins. */
 const Reserve = 6 + 2 * Margin;
 
-/** Size the window to the panel, and keep the panel inside the work area. */
+/** Size the window to the panel and clamp both X and Y cleanly inside the
+ *  monitor's exact physical work area across 1080p–8K and mixed-DPI setups. */
 export default async (Element:HTMLDivElement, Window:ReturnType<typeof getCurrentWebviewWindow>) => {
 	const Area = await Locate();
 
-	// The cap goes on before the measurement, not after it: the panel scrolls
-	// inside the window, so the height it measures is the height it is drawn at.
+	// Cap before measurement so scroll height stays strictly within the screen's work area.
 	Element.style.maxHeight = Area ? `${Math.max(Area.Height - Reserve, 2 * Margin)}px` : "";
 
 	const Height = Math.ceil(Element.getBoundingClientRect().height) + 2 * Margin;
@@ -34,12 +33,20 @@ export default async (Element:HTMLDivElement, Window:ReturnType<typeof getCurren
 
 	if (!Position) return;
 
-	const Y = Position.y / Area.Scale;
-	const Top = Math.min(Math.max(Y, Area.Top), Math.max(Area.Top, Area.Top + Area.Height - Height));
+	const WidthPx = Math.round(Width * Area.Scale);
+	const HeightPx = Math.round(Height * Area.Scale);
 
-	if (Math.abs(Top - Y) < 1) return;
+	const MinX = Area.LeftPx;
+	const MaxX = Math.max(MinX, Area.LeftPx + Area.WidthPx - WidthPx);
+	const MinY = Area.TopPx;
+	const MaxY = Math.max(MinY, Area.TopPx + Area.HeightPx - HeightPx);
 
-	await Window.setPosition(new LogicalPosition(Position.x / Area.Scale, Top)).catch((error) =>
+	const ClampedX = Math.round(Math.min(Math.max(Position.x, MinX), MaxX));
+	const ClampedY = Math.round(Math.min(Math.max(Position.y, MinY), MaxY));
+
+	if (Math.abs(ClampedX - Position.x) < 2 && Math.abs(ClampedY - Position.y) < 2) return;
+
+	await Window.setPosition(new PhysicalPosition(ClampedX, ClampedY)).catch((error) =>
 		console.warn("radius: the panel could not be moved back on screen", error),
 	);
 };

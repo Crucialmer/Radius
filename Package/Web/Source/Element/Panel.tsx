@@ -136,6 +136,24 @@ export default () => {
 				<Show when={State()} fallback={<p class="Empty">正在读取配置...</p>}>
 					{(state) => (
 						<>
+							<div class="BrandHeader">
+								<div class="BrandIdentity">
+									<span class="BrandEmblem" aria-hidden="true">
+										<svg viewBox="0 0 18 18" fill="none">
+											<path
+												d="M4.2 13.8V8.4A4.2 4.2 0 0 1 8.4 4.2h5.4"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+											/>
+											<circle cx="12.4" cy="12.4" r="1.6" fill="currentColor" opacity="0.65" />
+										</svg>
+									</span>
+									<span class="BrandName">Radius</span>
+								</div>
+								<span class="BrandBadge">v{state().version}</span>
+							</div>
+
 							<div class="Group">
 								<h2 class="Title">
 									<svg class="SectionIcon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

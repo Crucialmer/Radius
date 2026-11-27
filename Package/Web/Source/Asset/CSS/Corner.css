@@ -1,8 +1,9 @@
 .Corner {
 	/* Authentic Apple continuous corner spans 1.528665 * R along each edge so the
-	   requested radius R matches visual bezel curvature while keeping κ = 0 at joins. */
-	width: calc(var(--Corner, 15px) * 1.528665);
-	height: calc(var(--Corner, 15px) * 1.528665);
+	   requested radius R matches visual bezel curvature while keeping κ = 0 at joins.
+	   Clamped to 50vw/50vh so extreme radii never overlap opposing corners on compact or portrait displays. */
+	width: min(calc(var(--Corner, 15px) * 1.528665), 50vw, 50vh);
+	height: min(calc(var(--Corner, 15px) * 1.528665), 50vw, 50vh);
 	position: absolute;
 	pointer-events: none;
 	user-select: none;
@@ -94,7 +95,7 @@
 
 .TaskbarRim-Outer {
 	fill: none;
-	stroke: rgba(15, 18, 26, 0.18);
+	stroke: rgba(15, 18, 26, 0.16);
 }
 
 .TaskbarRim-Specular {
@@ -103,37 +104,37 @@
 
 .TaskbarRim-StopTop {
 	stop-color: #ffffff;
-	stop-opacity: 0.62;
+	stop-opacity: 0.66;
 }
 
 .TaskbarRim-StopMid {
 	stop-color: #ffffff;
-	stop-opacity: 0.24;
+	stop-opacity: 0.22;
 }
 
 .TaskbarRim-StopBottom {
 	stop-color: #ffffff;
-	stop-opacity: 0.12;
+	stop-opacity: 0.34;
 }
 
 @media (prefers-color-scheme: dark) {
 	.TaskbarRim-Outer {
-		stroke: rgba(0, 0, 0, 0.36);
+		stroke: rgba(0, 0, 0, 0.34);
 	}
 
 	.TaskbarRim-StopTop {
 		stop-color: #ffffff;
-		stop-opacity: 0.28;
+		stop-opacity: 0.30;
 	}
 
 	.TaskbarRim-StopMid {
 		stop-color: #ffffff;
-		stop-opacity: 0.11;
+		stop-opacity: 0.10;
 	}
 
 	.TaskbarRim-StopBottom {
 		stop-color: #ffffff;
-		stop-opacity: 0.05;
+		stop-opacity: 0.16;
 	}
 }
 

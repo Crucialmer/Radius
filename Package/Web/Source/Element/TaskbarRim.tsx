@@ -16,10 +16,10 @@ export type TaskbarRimProperty = {
  * pixels directly over the clipped Windows taskbar (`Shell_TrayWnd` /
  * `Shell_SecondaryTrayWnd`).
  *
- * Positioning uses viewport percentages (`left/top/width/height` in `%`) while
- * the SVG `viewBox` uses exact physical pixels (`0 0 widthPx heightPx`) with
- * `rx = radiusPx`, making alignment completely immune to `devicePixelRatio`,
- * fractional DPI, Windows text scaling, and cross-DPI monitor hotplug drift.
+ * Uses viewport percentage bounds (`%`) paired with an exact physical-pixel SVG
+ * `viewBox` (`0 0 widthPx heightPx`, `rx = radiusPx`) and a subtle diagonal
+ * Liquid Glass refraction highlight so alignment stays exact across 1080p–8K,
+ * 100%–400% DPI scaling, small/standard/multi-row taskbars, and monitor hotplugs.
  */
 export default (Property: TaskbarRimProperty) => {
 	const Width = () => Math.max(2, Property.widthPx);
@@ -27,7 +27,7 @@ export default (Property: TaskbarRimProperty) => {
 	const Scale = () => Math.max(1, Property.scale || 1);
 	const Radius = () => Math.min(Property.radiusPx, Math.min(Width(), Height()) / 2);
 	const OuterInset = () => 0.35 * Scale();
-	const InnerInset = () => 0.9 * Scale();
+	const InnerInset = () => 0.85 * Scale();
 
 	return (
 		<div
@@ -39,9 +39,9 @@ export default (Property: TaskbarRimProperty) => {
 				preserveAspectRatio="none"
 				aria-hidden="true">
 				<defs>
-					<linearGradient id="radius-tb-specular" x1="0" y1="0" x2="0" y2="1">
+					<linearGradient id="radius-tb-specular" x1="0" y1="0" x2="0.18" y2="1">
 						<stop offset="0%" class="TaskbarRim-StopTop" />
-						<stop offset="35%" class="TaskbarRim-StopMid" />
+						<stop offset="46%" class="TaskbarRim-StopMid" />
 						<stop offset="100%" class="TaskbarRim-StopBottom" />
 					</linearGradient>
 				</defs>
@@ -53,7 +53,7 @@ export default (Property: TaskbarRimProperty) => {
 					height={Math.max(0, Height() - OuterInset() * 2)}
 					rx={Radius()}
 					ry={Radius()}
-					stroke-width={1.4 * Scale()}
+					stroke-width={1.25 * Scale()}
 				/>
 				<rect
 					class="TaskbarRim-Specular"
@@ -61,10 +61,10 @@ export default (Property: TaskbarRimProperty) => {
 					y={InnerInset()}
 					width={Math.max(0, Width() - InnerInset() * 2)}
 					height={Math.max(0, Height() - InnerInset() * 2)}
-					rx={Math.max(0, Radius() - 0.55 * Scale())}
-					ry={Math.max(0, Radius() - 0.55 * Scale())}
+					rx={Math.max(0, Radius() - 0.5 * Scale())}
+					ry={Math.max(0, Radius() - 0.5 * Scale())}
 					stroke="url(#radius-tb-specular)"
-					stroke-width={1.1 * Scale()}
+					stroke-width={1.0 * Scale()}
 				/>
 			</svg>
 		</div>
