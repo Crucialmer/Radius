@@ -459,6 +459,7 @@ body {
 		inset 0 0.5px 0 rgba(255, 255, 255, 0.95),
 		0 1.5px 3px rgba(15, 20, 35, 0.22),
 		0 0.5px 1px rgba(15, 20, 35, 0.1);
+	transform: translate3d(0, 0, 0);
 	transition: transform 0.24s var(--spring), width 0.16s var(--spring);
 }
 
@@ -467,11 +468,11 @@ body {
 }
 
 .Switch input:checked + .SwitchTrack .SwitchThumb {
-	transform: translateX(16px);
+	transform: translate3d(16px, 0, 0);
 }
 
 .Switch:active input:checked + .SwitchTrack .SwitchThumb {
-	transform: translateX(12px);
+	transform: translate3d(12px, 0, 0);
 }
 
 /* Reset Pill Icon */

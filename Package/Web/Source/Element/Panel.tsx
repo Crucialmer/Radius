@@ -7,6 +7,7 @@ import Context from "../Context.js";
 import Describe from "../Fn/Describe.js";
 import Fit from "../Fn/Fit.js";
 import Name from "../Fn/Name.js";
+import { RunSpring } from "../Fn/Spring.js";
 import type { State, UpdateInfo } from "../Type/Panel.js";
 
 import Row from "./Row.jsx";
@@ -55,7 +56,104 @@ export default () => {
 
 		let Disposed = false;
 		let LastHeight = -1;
-		let Unlisten:(() => void) | undefined;
+		let UnlistenUpdate:(() => void) | undefined;
+		let UnlistenOpen:(() => void) | undefined;
+		let CancelOpenSprings:(() => void)[] = [];
+
+		const StopOpenSprings = () => {
+			for (const stop of CancelOpenSprings) stop();
+			CancelOpenSprings = [];
+		};
+
+		const PlayOpenSpring = (opensAbove:boolean) => {
+			StopOpenSprings();
+
+			const root = Element;
+			if (!root) return;
+
+			root.style.willChange = "transform, opacity";
+			root.style.transformOrigin = opensAbove ? "50% 100%" : "50% 0%";
+
+			CancelOpenSprings.push(
+				RunSpring({
+					from: 0,
+					to: 1,
+					stiffness: 540,
+					damping: 35,
+					precision: 0.001,
+					onUpdate: (t) => {
+						const op = Math.min(1, Math.max(0.2, 0.2 + 0.8 * t));
+						const sc = 0.975 + 0.025 * t;
+						root.style.opacity = `${op}`;
+						root.style.transform = `scale3d(${sc}, ${sc}, 1)`;
+					},
+					onComplete: () => {
+						root.style.opacity = "";
+						root.style.transform = "";
+						root.style.transformOrigin = "";
+						root.style.willChange = "";
+					},
+				}),
+			);
+
+			const groups = root.querySelectorAll<HTMLElement>(".Group");
+			const dir = opensAbove ? 6 : -6;
+			groups.forEach((group, index) => {
+				group.style.willChange = "transform";
+				const delay = Math.min(index * 16, 48);
+				const timer = window.setTimeout(() => {
+					if (Disposed) return;
+					CancelOpenSprings.push(
+						RunSpring({
+							from: dir,
+							to: 0,
+							stiffness: 580,
+							damping: 34,
+							precision: 0.05,
+							onUpdate: (dy) => {
+								group.style.transform = `translate3d(0, ${dy.toFixed(2)}px, 0)`;
+							},
+							onComplete: () => {
+								group.style.transform = "";
+								group.style.willChange = "";
+							},
+						}),
+					);
+				}, delay);
+				CancelOpenSprings.push(() => {
+					clearTimeout(timer);
+					group.style.transform = "";
+					group.style.willChange = "";
+				});
+			});
+		};
+
+		const OnSwitchChange = (event:Event & { currentTarget:HTMLInputElement }) => {
+			const input = event.currentTarget;
+			const track = input.nextElementSibling as HTMLElement | null;
+			const thumb = track?.querySelector<HTMLElement>(".SwitchThumb") ?? null;
+			if (!thumb) return;
+
+			const toX = input.checked ? 16 : 0;
+			const fromX = input.checked ? 0 : 16;
+			thumb.style.willChange = "transform";
+			const stop = RunSpring({
+				from: fromX,
+				to: toX,
+				stiffness: 680,
+				damping: 32,
+				precision: 0.05,
+				onUpdate: (x, v) => {
+					const stretch = Math.min(0.24, Math.abs(v) * 0.0008);
+					thumb.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0) scale3d(${(1 + stretch).toFixed(3)}, ${(1 - stretch * 0.35).toFixed(3)}, 1)`;
+				},
+				onComplete: () => {
+					thumb.style.transform = "";
+					thumb.style.willChange = "";
+				},
+			});
+			CancelOpenSprings.push(stop);
+		};
 
 		const ScheduleFit = () => {
 			const Measured = Element;
@@ -90,8 +188,16 @@ export default () => {
 			void call("state");
 		};
 
+		const OnDelegateChange = (event:Event) => {
+			const target = event.target as HTMLInputElement | null;
+			if (target?.type === "checkbox" && target.closest(".Switch")) {
+				OnSwitchChange(event as Event & { currentTarget:HTMLInputElement });
+			}
+		};
+
 		window.addEventListener("keydown", OnKeyDown);
 		window.addEventListener("focus", OnFocus);
+		Element?.addEventListener("change", OnDelegateChange);
 
 		void listen<UpdateInfo>(
 			"update",
@@ -103,16 +209,33 @@ export default () => {
 			if (Disposed) {
 				Off();
 			} else {
-				Unlisten = Off;
+				UnlistenUpdate = Off;
+			}
+		});
+
+		void listen<boolean>(
+			"panel-open",
+			({ payload }) => {
+				PlayOpenSpring(Boolean(payload));
+			},
+			{ target: Window.label },
+		).then((Off) => {
+			if (Disposed) {
+				Off();
+			} else {
+				UnlistenOpen = Off;
 			}
 		});
 
 		onCleanup(() => {
 			Disposed = true;
+			StopOpenSprings();
 			Observer.disconnect();
 			window.removeEventListener("keydown", OnKeyDown);
 			window.removeEventListener("focus", OnFocus);
-			Unlisten?.();
+			Element?.removeEventListener("change", OnDelegateChange);
+			UnlistenUpdate?.();
+			UnlistenOpen?.();
 		});
 	});
 
@@ -339,7 +462,7 @@ export default () => {
 											</span>
 										</label>
 									</div>
-									<p class="Note">独立于屏幕圆角；开启后任务栏处单独裁切并叠加抗锯齿玻璃描边</p>
+									<p class="Note">独立于屏幕圆角；开启后以 Apple G2 连续曲率裁切并叠加 D3D11 液态玻璃着色彩边</p>
 								</div>
 
 								<Row

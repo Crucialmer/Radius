@@ -2,7 +2,7 @@
 
 use tauri::{AppHandle, Runtime, WebviewWindow};
 
-use crate::{Backdrop::Close as BackdropClose, Tray::Session::Release};
+use crate::{Backdrop::Close as BackdropClose, Menu::Animate, Tray::Session::Release};
 
 /// Close the panel and the scrims together.
 ///
@@ -18,6 +18,8 @@ use crate::{Backdrop::Close as BackdropClose, Tray::Session::Release};
 /// icon. Only the close does it - a command that runs while the panel stays open
 /// must not make the icon blink.
 pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>) -> tauri::Result<()> {
+	Animate::Cancel();
+
 	BackdropClose::Fn(App);
 
 	let Closed = Window.hide();

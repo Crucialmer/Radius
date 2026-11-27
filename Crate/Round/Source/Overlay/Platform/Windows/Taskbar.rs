@@ -553,9 +553,13 @@ pub fn InitialFrame(ScreenItem:&Screen, Enabled:bool, TaskbarRadius:Radius) -> F
 #[cfg(not(target_os = "windows"))]
 pub fn InitialFrame(_ScreenItem:&Screen, _Enabled:bool, _TaskbarRadius:Radius) -> Frame { Frame::default() }
 
-/// Compute analytic scanline rectangles in `(OffsetX, OffsetY)..(OffsetX + Width, OffsetY + Height)`
-/// matching Direct2D's pixel-center rounded-rect arc (`(R - (y + 0.5))` / `R`) within <= 0.5 px,
-/// coalescing consecutive rows that share the same horizontal inset.
+const SQUIRCLE_N:f64 = 3.28;
+
+const SQUIRCLE_SPAN_RATIO:f64 = 1.528_665;
+
+/// Compute analytic Apple G2 continuous-curvature (Squircle) scanline rectangles in
+/// `(OffsetX, OffsetY)..(OffsetX + Width, OffsetY + Height)` matching `LiquidGlass.hlsl`
+/// (`N = 3.28`, `Span = min(1.528665 * R, W/2, H/2)`) within <= 0.5 px at pixel centers.
 #[cfg(target_os = "windows")]
 fn BuildAnalyticRoundRectRects(
 	OffsetX:i32,
@@ -570,25 +574,31 @@ fn BuildAnalyticRoundRectRects(
 		return Vec::new();
 	}
 
-	let R = Radius.clamp(0, (Width / 2).min(Height / 2));
+	let ClampedR = Radius.clamp(0, (Width / 2).min(Height / 2));
 
-	if R <= 0 {
+	if ClampedR <= 0 {
 		return vec![RECT { left:OffsetX, top:OffsetY, right:OffsetX + Width, bottom:OffsetY + Height }];
 	}
 
+	let SpanF = (f64::from(ClampedR) * SQUIRCLE_SPAN_RATIO)
+		.min(f64::from(Width) * 0.5)
+		.min(f64::from(Height) * 0.5);
+
+	let SpanRows = (SpanF.ceil() as i32).min(Height / 2);
+
+	let MaxInset = ((Width - 1) / 2).max(0);
+
 	let RowInset = |K:i32| -> i32 {
-		let Rf = f64::from(R);
+		let Uy = ((SpanF - (f64::from(K) + 0.5)) / SpanF).clamp(0.0, 1.0);
 
-		let Dy = Rf - (f64::from(K) + 0.5);
+		let Ux = (1.0 - Uy.powf(SQUIRCLE_N)).max(0.0).powf(1.0 / SQUIRCLE_N);
 
-		let D2dX = Rf - (Rf * Rf - Dy * Dy).max(0.0).sqrt();
+		let SquircleX = SpanF * (1.0 - Ux);
 
-		let MaxInset = ((Width - 1) / 2).max(0);
-
-		((D2dX - 0.5).ceil().max(0.0) as i32).min(MaxInset)
+		((SquircleX - 0.5).ceil().max(0.0) as i32).min(MaxInset)
 	};
 
-	let mut Rects:Vec<RECT> = Vec::with_capacity((R as usize) * 2 + 1);
+	let mut Rects:Vec<RECT> = Vec::with_capacity((SpanRows as usize) * 2 + 1);
 
 	let mut PushBand = |Top:i32, Bottom:i32, Inset:i32| {
 		if Bottom <= Top {
@@ -614,15 +624,15 @@ fn BuildAnalyticRoundRectRects(
 		}
 	};
 
-	for K in 0..R {
+	for K in 0..SpanRows {
 		let Y = OffsetY + K;
 
 		PushBand(Y, Y + 1, RowInset(K));
 	}
 
-	PushBand(OffsetY + R, OffsetY + Height - R, 0);
+	PushBand(OffsetY + SpanRows, OffsetY + Height - SpanRows, 0);
 
-	for K in (0..R).rev() {
+	for K in (0..SpanRows).rev() {
 		let Y = OffsetY + Height - 1 - K;
 
 		PushBand(Y, Y + 1, RowInset(K));
@@ -958,15 +968,19 @@ mod tests {
 		Graphics::Gdi::{COMPLEXREGION, DeleteObject, GetRgnBox, PtInRegion},
 	};
 
-	use super::{BuildAnalyticRoundRectRects, CreateAnalyticRoundRectRgn};
+	use super::{BuildAnalyticRoundRectRects, CreateAnalyticRoundRectRgn, SQUIRCLE_N, SQUIRCLE_SPAN_RATIO};
 
-	fn AssertAnalyticRectsMatchCircle(OffsetX:i32, OffsetY:i32, Width:i32, Height:i32, Radius:i32) {
+	fn AssertAnalyticRectsMatchSquircle(OffsetX:i32, OffsetY:i32, Width:i32, Height:i32, Radius:i32) {
 		let Rects = BuildAnalyticRoundRectRects(OffsetX, OffsetY, Width, Height, Radius);
 		assert!(!Rects.is_empty());
 		assert_eq!(Rects.first().unwrap().top, OffsetY);
 		assert_eq!(Rects.last().unwrap().bottom, OffsetY + Height);
 
-		let R = Radius.clamp(0, (Width / 2).min(Height / 2));
+		let ClampedR = Radius.clamp(0, (Width / 2).min(Height / 2));
+		let SpanF = (f64::from(ClampedR) * SQUIRCLE_SPAN_RATIO)
+			.min(f64::from(Width) * 0.5)
+			.min(f64::from(Height) * 0.5);
+		let SpanRows = (SpanF.ceil() as i32).min(Height / 2);
 
 		for Window in Rects.windows(2) {
 			assert_eq!(Window[0].bottom, Window[1].top, "scanline bands must be strictly contiguous");
@@ -981,22 +995,22 @@ mod tests {
 
 			for Y in Band.top..Band.bottom {
 				let LocalY = Y - OffsetY;
-				let K = if LocalY < R {
+				let K = if LocalY < SpanRows {
 					Some(LocalY)
-				} else if LocalY >= Height - R {
+				} else if LocalY >= Height - SpanRows {
 					Some(Height - 1 - LocalY)
 				} else {
 					None
 				};
 
 				if let Some(KVal) = K {
-					let Rf = f64::from(R);
-					let Dy = Rf - (f64::from(KVal) + 0.5);
-					let AnalyticX = Rf - (Rf * Rf - Dy * Dy).max(0.0).sqrt();
+					let Uy = ((SpanF - (f64::from(KVal) + 0.5)) / SpanF).clamp(0.0, 1.0);
+					let Ux = (1.0 - Uy.powf(SQUIRCLE_N)).max(0.0).powf(1.0 / SQUIRCLE_N);
+					let AnalyticX = SpanF * (1.0 - Ux);
 					let Diff = (f64::from(LeftInset) - AnalyticX).abs();
 					assert!(
 						Diff <= 0.501,
-						"row y={LocalY} inset={LeftInset} diverged from analytic {AnalyticX:.3} by {Diff:.3}"
+						"row y={LocalY} inset={LeftInset} diverged from squircle {AnalyticX:.3} by {Diff:.3}"
 					);
 				} else {
 					assert_eq!(LeftInset, 0, "straight body row y={LocalY} must have 0 inset");
@@ -1007,9 +1021,9 @@ mod tests {
 
 	#[test]
 	fn AnalyticRoundRectScanlinesAreExactAndSymmetric() {
-		AssertAnalyticRectsMatchCircle(0, 0, 3840, 64, 16);
-		AssertAnalyticRectsMatchCircle(4, 2, 3840, 42, 12);
-		AssertAnalyticRectsMatchCircle(0, 0, 200, 40, 20);
+		AssertAnalyticRectsMatchSquircle(0, 0, 3840, 64, 16);
+		AssertAnalyticRectsMatchSquircle(4, 2, 3840, 42, 12);
+		AssertAnalyticRectsMatchSquircle(0, 0, 200, 40, 20);
 	}
 
 	#[test]

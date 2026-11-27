@@ -386,16 +386,512 @@ pub fn AllHwnds() -> Vec<(String, isize)> {
 }
 
 // ============================================================================
-// Native Win32 + Direct3D 11 + Direct2D + DirectComposition implementation
+// Native Win32 + Direct3D 11 HLSL + Direct2D + DirectComposition implementation
 // ============================================================================
 
+const LIQUID_GLASS_HLSL:&str = include_str!("LiquidGlass.hlsl");
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShaderUniforms {
+	Screen:[f32; 4],
+	Style:[f32; 4],
+	CornerMask:[f32; 4],
+	MaxWork:[f32; 4],
+	RimRect:[f32; 4],
+	RimParams:[f32; 4],
+	RimDetail:[f32; 4],
+	Extra:[f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpringScalar {
+	Value:f32,
+	Velocity:f32,
+	Target:f32,
+}
+
+impl SpringScalar {
+	fn New(Initial:f32) -> Self { Self { Value:Initial, Velocity:0.0, Target:Initial } }
+
+	fn Snap(&mut self, Value:f32) {
+		self.Value = Value;
+		self.Target = Value;
+		self.Velocity = 0.0;
+	}
+
+	fn SetTarget(&mut self, Target:f32) { self.Target = Target; }
+
+	fn Step(&mut self, DtSec:f32, Stiffness:f32, Damping:f32, ClampUnit:bool) -> bool {
+		let Dt = DtSec.clamp(0.0005, 0.05);
+
+		if (self.Value - self.Target).abs() < 0.002 && self.Velocity.abs() < 0.01 {
+			self.Value = self.Target;
+			self.Velocity = 0.0;
+			return false;
+		}
+
+		let Steps = ((Dt * 240.0).ceil() as usize).max(1);
+
+		let H = Dt / (Steps as f32);
+
+		for _ in 0..Steps {
+			let Acc = Stiffness * (self.Target - self.Value) - Damping * self.Velocity;
+
+			self.Velocity += Acc * H;
+			self.Value += self.Velocity * H;
+
+			if ClampUnit {
+				if self.Value <= 0.0 {
+					self.Value = 0.0;
+					self.Velocity = self.Velocity.max(0.0);
+				} else if self.Value >= 1.0 {
+					self.Value = 1.0;
+					self.Velocity = self.Velocity.min(0.0);
+				}
+			}
+		}
+
+		if (self.Value - self.Target).abs() < 0.002 && self.Velocity.abs() < 0.01 {
+			self.Value = self.Target;
+			self.Velocity = 0.0;
+			false
+		} else {
+			true
+		}
+	}
+}
+
+struct MonitorSprings {
+	Initialized:bool,
+	ScreenRadiusPx:SpringScalar,
+	ScreenOpacity:SpringScalar,
+	MaxOpacity:SpringScalar,
+	MaxBottomPx:SpringScalar,
+	WorkLeftPx:SpringScalar,
+	WorkRightPx:SpringScalar,
+	RimRadiusPx:SpringScalar,
+	RimOpacity:SpringScalar,
+	RimLeftPx:SpringScalar,
+	RimTopPx:SpringScalar,
+	RimWidthPx:SpringScalar,
+	RimHeightPx:SpringScalar,
+	InkMix:SpringScalar,
+	ThemeMix:SpringScalar,
+	Scale:f32,
+	WidthPx:f32,
+	HeightPx:f32,
+	DrawMask:[f32; 4],
+	RimIsHorizontal:bool,
+	LastRendered:Option<ShaderUniforms>,
+}
+
+impl Default for MonitorSprings {
+	fn default() -> Self {
+		Self {
+			Initialized:false,
+			ScreenRadiusPx:SpringScalar::New(0.0),
+			ScreenOpacity:SpringScalar::New(0.0),
+			MaxOpacity:SpringScalar::New(0.0),
+			MaxBottomPx:SpringScalar::New(0.0),
+			WorkLeftPx:SpringScalar::New(0.0),
+			WorkRightPx:SpringScalar::New(0.0),
+			RimRadiusPx:SpringScalar::New(0.0),
+			RimOpacity:SpringScalar::New(0.0),
+			RimLeftPx:SpringScalar::New(0.0),
+			RimTopPx:SpringScalar::New(0.0),
+			RimWidthPx:SpringScalar::New(0.0),
+			RimHeightPx:SpringScalar::New(0.0),
+			InkMix:SpringScalar::New(0.0),
+			ThemeMix:SpringScalar::New(0.0),
+			Scale:1.0,
+			WidthPx:1.0,
+			HeightPx:1.0,
+			DrawMask:[1.0; 4],
+			RimIsHorizontal:true,
+			LastRendered:None,
+		}
+	}
+}
+
+impl MonitorSprings {
+	fn ApplyKey(&mut self, Key:&MonitorVisualKey, SnapAll:bool) {
+		let Scale = ((Key.ScaleMilli as f32) / 1000.0).max(1.0);
+
+		self.Scale = Scale;
+		self.WidthPx = Key.WidthPx.max(1) as f32;
+		self.HeightPx = Key.HeightPx.max(1) as f32;
+
+		let ScreenOn = Key.ScreenVisible && Key.RadiusDp > 0;
+
+		let TargetScreenR = (Key.RadiusDp as f32) * Scale;
+
+		let TargetScreenOp = if ScreenOn { 1.0 } else { 0.0 };
+
+		let TargetMaxOn = ScreenOn && Key.MaximizeCorners && Key.Work.Maximized && Key.Work.BottomPx > 1;
+
+		let TargetMaxOp = if TargetMaxOn { 1.0 } else { 0.0 };
+
+		let TargetMaxBottom = Key.Work.BottomPx.max(0) as f32;
+
+		let TargetWorkLeft = Key.Work.LeftPx.max(0) as f32;
+
+		let TargetWorkRight = Key.Work.RightPx.max(0) as f32;
+
+		let Edge = Key.Rim.Edge;
+
+		self.DrawMask = [
+			if Edge != "top" && Edge != "left" { 1.0 } else { 0.0 },
+			if Edge != "top" && Edge != "right" { 1.0 } else { 0.0 },
+			if Edge != "bottom" && Edge != "left" { 1.0 } else { 0.0 },
+			if Edge != "bottom" && Edge != "right" { 1.0 } else { 0.0 },
+		];
+
+		let RimOn = Key.Rim.Visible && Key.Rim.RadiusPx > 0 && Key.Rim.WidthPx > 2 && Key.Rim.HeightPx > 2;
+
+		let TargetRimOp = if RimOn { 1.0 } else { 0.0 };
+
+		let TargetRimR = if RimOn { Key.Rim.RadiusPx as f32 } else { 0.0 };
+
+		let TargetInk = if Key.LightInk { 1.0 } else { 0.0 };
+
+		let TargetTheme = if Key.DarkTheme { 1.0 } else { 0.0 };
+
+		if SnapAll || !self.Initialized {
+			self.ScreenRadiusPx.Snap(TargetScreenR);
+			self.ScreenOpacity.Snap(TargetScreenOp);
+			self.MaxOpacity.Snap(TargetMaxOp);
+			self.MaxBottomPx.Snap(TargetMaxBottom);
+			self.WorkLeftPx.Snap(TargetWorkLeft);
+			self.WorkRightPx.Snap(TargetWorkRight);
+			self.RimRadiusPx.Snap(TargetRimR);
+			self.RimOpacity.Snap(TargetRimOp);
+			self.RimLeftPx.Snap(Key.Rim.LeftPx as f32);
+			self.RimTopPx.Snap(Key.Rim.TopPx as f32);
+			self.RimWidthPx.Snap(Key.Rim.WidthPx.max(0) as f32);
+			self.RimHeightPx.Snap(Key.Rim.HeightPx.max(0) as f32);
+			self.InkMix.Snap(TargetInk);
+			self.ThemeMix.Snap(TargetTheme);
+			self.RimIsHorizontal = Key.Rim.WidthPx >= Key.Rim.HeightPx;
+			self.Initialized = true;
+			return;
+		}
+
+		// When re-appearing from hidden, snap spatial frame bounds so corners/rims do
+		// not fly in from (0, 0); spring only the opacity and radius smoothly.
+		if self.ScreenOpacity.Value <= 0.002 && TargetScreenOp > 0.5 {
+			self.ScreenRadiusPx.Snap(TargetScreenR * 0.72);
+			self.InkMix.Snap(TargetInk);
+		} else {
+			self.ScreenRadiusPx.SetTarget(TargetScreenR);
+			self.InkMix.SetTarget(TargetInk);
+		}
+		self.ScreenOpacity.SetTarget(TargetScreenOp);
+
+		if self.MaxOpacity.Value <= 0.002 && TargetMaxOp > 0.5 {
+			self.MaxBottomPx.Snap(TargetMaxBottom);
+			self.WorkLeftPx.Snap(TargetWorkLeft);
+			self.WorkRightPx.Snap(TargetWorkRight);
+		} else if TargetMaxOn {
+			self.MaxBottomPx.SetTarget(TargetMaxBottom);
+			self.WorkLeftPx.SetTarget(TargetWorkLeft);
+			self.WorkRightPx.SetTarget(TargetWorkRight);
+		}
+		self.MaxOpacity.SetTarget(TargetMaxOp);
+
+		if self.RimOpacity.Value <= 0.002 && RimOn {
+			self.RimLeftPx.Snap(Key.Rim.LeftPx as f32);
+			self.RimTopPx.Snap(Key.Rim.TopPx as f32);
+			self.RimWidthPx.Snap(Key.Rim.WidthPx as f32);
+			self.RimHeightPx.Snap(Key.Rim.HeightPx as f32);
+			self.RimRadiusPx.Snap(TargetRimR * 0.65);
+			self.RimIsHorizontal = Key.Rim.WidthPx >= Key.Rim.HeightPx;
+		} else if RimOn {
+			self.RimLeftPx.SetTarget(Key.Rim.LeftPx as f32);
+			self.RimTopPx.SetTarget(Key.Rim.TopPx as f32);
+			self.RimWidthPx.SetTarget(Key.Rim.WidthPx as f32);
+			self.RimHeightPx.SetTarget(Key.Rim.HeightPx as f32);
+			self.RimIsHorizontal = Key.Rim.WidthPx >= Key.Rim.HeightPx;
+		}
+
+		if ScreenOn || TargetScreenR > 0.0 {
+			self.ScreenRadiusPx.SetTarget(TargetScreenR);
+		}
+		self.RimRadiusPx.SetTarget(TargetRimR);
+		self.RimOpacity.SetTarget(TargetRimOp);
+		self.ThemeMix.SetTarget(TargetTheme);
+	}
+
+	fn Step(&mut self, DtSec:f32) -> bool {
+		// Radius/spatial springs: crisp underdamped Apple spring (~260ms settle)
+		const MOTION_K:f32 = 420.0;
+		const MOTION_C:f32 = 34.0;
+		// Opacity & color mix: critically damped (zero overshoot past [0, 1])
+		const FADE_K:f32 = 480.0;
+		const FADE_C:f32 = 43.8;
+
+		let mut Moving = false;
+		Moving |= self.ScreenRadiusPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.MaxBottomPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.WorkLeftPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.WorkRightPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.RimRadiusPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.RimLeftPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.RimTopPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.RimWidthPx.Step(DtSec, MOTION_K, MOTION_C, false);
+		Moving |= self.RimHeightPx.Step(DtSec, MOTION_K, MOTION_C, false);
+
+		Moving |= self.ScreenOpacity.Step(DtSec, FADE_K, FADE_C, true);
+		Moving |= self.MaxOpacity.Step(DtSec, FADE_K, FADE_C, true);
+		Moving |= self.RimOpacity.Step(DtSec, FADE_K, FADE_C, true);
+		Moving |= self.InkMix.Step(DtSec, FADE_K, FADE_C, true);
+		Moving |= self.ThemeMix.Step(DtSec, FADE_K, FADE_C, true);
+		Moving
+	}
+
+	fn IsVisibleNow(&self) -> bool { self.ScreenOpacity.Value > 0.002 || self.RimOpacity.Value > 0.002 }
+
+	fn BuildUniforms(&self) -> ShaderUniforms {
+		let W = self.WidthPx.max(1.0);
+
+		let H = self.HeightPx.max(1.0);
+
+		let ScreenSpan = (self.ScreenRadiusPx.Value * 1.528_665).min(W * 0.5).min(H * 0.5).max(0.0);
+
+		let BottomSpan =
+			if self.MaxOpacity.Value > 0.002 { ScreenSpan.min(self.MaxBottomPx.Value.max(0.0)) } else { ScreenSpan };
+
+		let WorkBottomY = (H - self.MaxBottomPx.Value.max(0.0)).clamp(0.0, H);
+
+		let WorkLeftX = self.WorkLeftPx.Value.clamp(0.0, W);
+
+		let WorkRightX = (W - self.WorkRightPx.Value.max(0.0)).clamp(0.0, W);
+
+		let RimW = self.RimWidthPx.Value.max(0.0);
+
+		let RimH = self.RimHeightPx.Value.max(0.0);
+
+		let RimR = self.RimRadiusPx.Value.max(0.0);
+
+		let RimSpan = (RimR * 1.528_665).min(RimW * 0.5).min(RimH * 0.5).max(0.0);
+
+		let Layout = ComputeRimLayout(self.RimLeftPx.Value, self.RimTopPx.Value, RimW, RimH, RimSpan, self.Scale);
+
+		let InnerStart = (Layout.InnerInset - Layout.InnerW * 0.5).max(0.0);
+
+		let InnerEnd = Layout.InnerInset + Layout.InnerW * 0.5;
+
+		ShaderUniforms {
+			Screen:[W, H, self.Scale, ScreenSpan],
+			Style:[
+				self.ScreenOpacity.Value.clamp(0.0, 1.0),
+				self.InkMix.Value.clamp(0.0, 1.0),
+				self.ThemeMix.Value.clamp(0.0, 1.0),
+				BottomSpan,
+			],
+			CornerMask:self.DrawMask,
+			MaxWork:[self.MaxOpacity.Value.clamp(0.0, 1.0), WorkLeftX, WorkRightX, WorkBottomY],
+			RimRect:[self.RimLeftPx.Value, self.RimTopPx.Value, RimW, RimH],
+			RimParams:[RimSpan, self.RimOpacity.Value.clamp(0.0, 1.0), Layout.OuterW, Layout.InnerW],
+			RimDetail:[InnerStart, InnerEnd, if self.RimIsHorizontal { 1.0 } else { 0.0 }, 0.0],
+			Extra:[0.0; 4],
+		}
+	}
+}
+
+struct ShaderPipeline {
+	VertexShader:windows::Win32::Graphics::Direct3D11::ID3D11VertexShader,
+	PixelShader:windows::Win32::Graphics::Direct3D11::ID3D11PixelShader,
+	ConstantBuffer:windows::Win32::Graphics::Direct3D11::ID3D11Buffer,
+	RasterState:windows::Win32::Graphics::Direct3D11::ID3D11RasterizerState,
+}
+
+impl ShaderPipeline {
+	fn New(Device:&windows::Win32::Graphics::Direct3D11::ID3D11Device) -> windows::core::Result<Self> {
+		use std::mem::size_of;
+
+		use windows::{
+			Win32::Graphics::{
+				Direct3D::{Fxc::D3DCompile, ID3DBlob, ID3DInclude},
+				Direct3D11::{
+					D3D11_BIND_CONSTANT_BUFFER,
+					D3D11_BUFFER_DESC,
+					D3D11_CPU_ACCESS_WRITE,
+					D3D11_CULL_NONE,
+					D3D11_FILL_SOLID,
+					D3D11_RASTERIZER_DESC,
+					D3D11_USAGE_DYNAMIC,
+				},
+			},
+			core::PCSTR,
+		};
+
+		let Compile = |Entry:&core::ffi::CStr, Target:&core::ffi::CStr| -> windows::core::Result<ID3DBlob> {
+			let mut Code:Option<ID3DBlob> = None;
+
+			let mut Errors:Option<ID3DBlob> = None;
+
+			let Source = LIQUID_GLASS_HLSL.as_bytes();
+
+			let NoInclude:Option<&ID3DInclude> = None;
+
+			// D3DCOMPILE_ENABLE_STRICTNESS (1 << 11) | D3DCOMPILE_OPTIMIZATION_LEVEL3 (1 << 15)
+			let Flags:u32 = (1 << 11) | (1 << 15);
+
+			let Res = unsafe {
+				D3DCompile(
+					Source.as_ptr() as *const core::ffi::c_void,
+					Source.len(),
+					PCSTR(c"LiquidGlass.hlsl".as_ptr() as *const u8),
+					None,
+					NoInclude,
+					PCSTR(Entry.as_ptr() as *const u8),
+					PCSTR(Target.as_ptr() as *const u8),
+					Flags,
+					0,
+					&mut Code,
+					Some(&mut Errors),
+				)
+			};
+
+			if let Err(Error) = Res {
+				if let Some(Blob) = Errors {
+					let Msg = unsafe {
+						let Ptr = Blob.GetBufferPointer() as *const u8;
+						let Len = Blob.GetBufferSize();
+						String::from_utf8_lossy(std::slice::from_raw_parts(Ptr, Len)).into_owned()
+					};
+					eprintln!("radius: HLSL compile error: {Msg}");
+				}
+				return Err(Error);
+			}
+
+			Code.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))
+		};
+
+		let VsBlob = Compile(c"VSMain", c"vs_4_0")?;
+
+		let PsBlob = Compile(c"PSMain", c"ps_4_0")?;
+
+		let VsBytes =
+			unsafe { std::slice::from_raw_parts(VsBlob.GetBufferPointer() as *const u8, VsBlob.GetBufferSize()) };
+
+		let PsBytes =
+			unsafe { std::slice::from_raw_parts(PsBlob.GetBufferPointer() as *const u8, PsBlob.GetBufferSize()) };
+
+		let mut VertexShader = None;
+
+		let mut PixelShader = None;
+
+		let BufDesc = D3D11_BUFFER_DESC {
+			ByteWidth:size_of::<ShaderUniforms>() as u32,
+			Usage:D3D11_USAGE_DYNAMIC,
+			BindFlags:D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+			CPUAccessFlags:D3D11_CPU_ACCESS_WRITE.0 as u32,
+			MiscFlags:0,
+			StructureByteStride:0,
+		};
+
+		let mut ConstantBuffer = None;
+
+		let RastDesc = D3D11_RASTERIZER_DESC {
+			FillMode:D3D11_FILL_SOLID,
+			CullMode:D3D11_CULL_NONE,
+			FrontCounterClockwise:false.into(),
+			DepthBias:0,
+			DepthBiasClamp:0.0,
+			SlopeScaledDepthBias:0.0,
+			DepthClipEnable:false.into(),
+			ScissorEnable:false.into(),
+			MultisampleEnable:false.into(),
+			AntialiasedLineEnable:false.into(),
+		};
+
+		let mut RasterState = None;
+
+		unsafe {
+			Device.CreateVertexShader(VsBytes, None, Some(&mut VertexShader))?;
+			Device.CreatePixelShader(PsBytes, None, Some(&mut PixelShader))?;
+			Device.CreateBuffer(&BufDesc, None, Some(&mut ConstantBuffer))?;
+			Device.CreateRasterizerState(&RastDesc, Some(&mut RasterState))?;
+		}
+
+		Ok(Self {
+			VertexShader:VertexShader.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+			PixelShader:PixelShader.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+			ConstantBuffer:ConstantBuffer
+				.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+			RasterState:RasterState.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+		})
+	}
+
+	fn RenderToRtv(
+		&self,
+		Ctx:&windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+		Rtv:&windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView,
+		WidthPx:f32,
+		HeightPx:f32,
+		Uniforms:&ShaderUniforms,
+	) -> windows::core::Result<()> {
+		use windows::Win32::Graphics::{
+			Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+			Direct3D11::{D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE, D3D11_VIEWPORT},
+		};
+
+		unsafe {
+			let mut Mapped = D3D11_MAPPED_SUBRESOURCE::default();
+
+			Ctx.Map(&self.ConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut Mapped))?;
+			std::ptr::copy_nonoverlapping(Uniforms, Mapped.pData as *mut ShaderUniforms, 1);
+			Ctx.Unmap(&self.ConstantBuffer, 0);
+
+			let ClearColor = [0.0_f32; 4];
+
+			Ctx.ClearRenderTargetView(Rtv, &ClearColor);
+
+			let Viewport = D3D11_VIEWPORT {
+				TopLeftX:0.0,
+				TopLeftY:0.0,
+				Width:WidthPx.max(1.0),
+				Height:HeightPx.max(1.0),
+				MinDepth:0.0,
+				MaxDepth:1.0,
+			};
+
+			Ctx.RSSetViewports(Some(&[Viewport]));
+			Ctx.RSSetState(&self.RasterState);
+			Ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			Ctx.VSSetShader(&self.VertexShader, None);
+			Ctx.PSSetShader(&self.PixelShader, None);
+
+			let Cbs = [Some(self.ConstantBuffer.clone())];
+
+			Ctx.PSSetConstantBuffers(0, Some(&Cbs));
+
+			let Rtvs = [Some(Rtv.clone())];
+
+			Ctx.OMSetRenderTargets(Some(&Rtvs), None);
+			Ctx.OMSetBlendState(None, None, 0xFFFF_FFFF);
+			Ctx.Draw(3, 0);
+
+			let Empty:[Option<windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView>; 1] = [None];
+
+			Ctx.OMSetRenderTargets(Some(&Empty), None);
+		}
+
+		Ok(())
+	}
+}
+
 struct GpuCore {
-	_D3dDevice:windows::Win32::Graphics::Direct3D11::ID3D11Device,
+	D3dDevice:windows::Win32::Graphics::Direct3D11::ID3D11Device,
+	D3dCtx:windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
 	DxgiFactory:windows::Win32::Graphics::Dxgi::IDXGIFactory2,
 	D2dFactory:windows::Win32::Graphics::Direct2D::ID2D1Factory1,
 	_D2dDevice:windows::Win32::Graphics::Direct2D::ID2D1Device,
 	D2dCtx:windows::Win32::Graphics::Direct2D::ID2D1DeviceContext,
 	DComp:windows::Win32::Graphics::DirectComposition::IDCompositionDevice,
+	Shader:Option<ShaderPipeline>,
 }
 
 impl GpuCore {
@@ -417,7 +913,13 @@ impl GpuCore {
 					D3D_FEATURE_LEVEL_11_0,
 					D3D_FEATURE_LEVEL_11_1,
 				},
-				Direct3D11::{D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device},
+				Direct3D11::{
+					D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+					D3D11_SDK_VERSION,
+					D3D11CreateDevice,
+					ID3D11Device,
+					ID3D11DeviceContext,
+				},
 				DirectComposition::{DCompositionCreateDevice, IDCompositionDevice},
 				Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIDevice, IDXGIFactory2},
 			},
@@ -431,8 +933,10 @@ impl GpuCore {
 			D3D_FEATURE_LEVEL_10_0,
 		];
 
-		let TryCreate = |Driver:D3D_DRIVER_TYPE| -> windows::core::Result<ID3D11Device> {
+		let TryCreate = |Driver:D3D_DRIVER_TYPE| -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
 			let mut Device:Option<ID3D11Device> = None;
+
+			let mut Ctx:Option<ID3D11DeviceContext> = None;
 
 			unsafe {
 				D3D11CreateDevice(
@@ -444,14 +948,17 @@ impl GpuCore {
 					D3D11_SDK_VERSION,
 					Some(&mut Device),
 					None,
-					None,
+					Some(&mut Ctx),
 				)?;
 			}
 
-			Device.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))
+			Ok((
+				Device.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+				Ctx.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?,
+			))
 		};
 
-		let D3dDevice = TryCreate(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| TryCreate(D3D_DRIVER_TYPE_WARP))?;
+		let (D3dDevice, D3dCtx) = TryCreate(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| TryCreate(D3D_DRIVER_TYPE_WARP))?;
 
 		let DxgiDevice:IDXGIDevice = D3dDevice.cast()?;
 
@@ -470,13 +977,17 @@ impl GpuCore {
 
 		let DComp:IDCompositionDevice = unsafe { DCompositionCreateDevice(&DxgiDevice)? };
 
+		let Shader = ShaderPipeline::New(&D3dDevice).ok();
+
 		Ok(Self {
-			_D3dDevice:D3dDevice,
+			D3dDevice,
+			D3dCtx,
 			DxgiFactory,
 			D2dFactory,
 			_D2dDevice:D2dDevice,
 			D2dCtx,
 			DComp,
+			Shader,
 		})
 	}
 }
@@ -492,6 +1003,7 @@ struct MonitorSurface {
 	HeightPx:i32,
 	Visible:bool,
 	LastKey:Option<MonitorVisualKey>,
+	Springs:MonitorSprings,
 }
 
 impl Drop for MonitorSurface {
@@ -614,7 +1126,7 @@ fn CreateSurface(Core:&GpuCore, ClassName:&[u16], Config:&MonitorConfig) -> wind
 		Flags:0,
 	};
 
-	let SwapChain = unsafe { Core.DxgiFactory.CreateSwapChainForComposition(&Core._D3dDevice, &Desc, None)? };
+	let SwapChain = unsafe { Core.DxgiFactory.CreateSwapChainForComposition(&Core.D3dDevice, &Desc, None)? };
 
 	let Target = unsafe { Core.DComp.CreateTargetForHwnd(Hwnd, true)? };
 
@@ -637,6 +1149,7 @@ fn CreateSurface(Core:&GpuCore, ClassName:&[u16], Config:&MonitorConfig) -> wind
 		HeightPx:H,
 		Visible:false,
 		LastKey:None,
+		Springs:MonitorSprings::default(),
 	})
 }
 
@@ -846,7 +1359,66 @@ fn DrawTaskbarRim(Core:&GpuCore, Rim:&TaskbarRimState, DarkTheme:bool) -> window
 	Ok(())
 }
 
-fn PaintSurface(Core:&GpuCore, Surface:&mut MonitorSurface, Key:&MonitorVisualKey) -> windows::core::Result<()> {
+fn PaintSurfaceD3d11(
+	Core:&GpuCore,
+	Pipeline:&ShaderPipeline,
+	Surface:&mut MonitorSurface,
+	Uniforms:&ShaderUniforms,
+) -> windows::core::Result<()> {
+	use windows::Win32::Graphics::{Direct3D11::ID3D11Texture2D, Dxgi::DXGI_PRESENT};
+
+	let BackBuffer:ID3D11Texture2D = unsafe { Surface.SwapChain.GetBuffer(0)? };
+
+	let mut Rtv = None;
+
+	unsafe {
+		Core.D3dDevice.CreateRenderTargetView(&BackBuffer, None, Some(&mut Rtv))?;
+	}
+
+	let Rtv = Rtv.ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?;
+
+	Pipeline.RenderToRtv(
+		&Core.D3dCtx,
+		&Rtv,
+		Surface.WidthPx.max(1) as f32,
+		Surface.HeightPx.max(1) as f32,
+		Uniforms,
+	)?;
+
+	drop(Rtv);
+	drop(BackBuffer);
+
+	unsafe {
+		Surface.SwapChain.Present(0, DXGI_PRESENT(0)).ok()?;
+		Core.DComp.Commit()?;
+	}
+
+	Surface.Springs.LastRendered = Some(*Uniforms);
+
+	Ok(())
+}
+
+fn RenderSurface(Core:&GpuCore, Surface:&mut MonitorSurface, Key:&MonitorVisualKey) -> windows::core::Result<()> {
+	let Uniforms = Surface.Springs.BuildUniforms();
+
+	if Surface.Springs.LastRendered.as_ref() == Some(&Uniforms) {
+		return Ok(());
+	}
+
+	if let Some(Pipeline) = Core.Shader.as_ref() {
+		return PaintSurfaceD3d11(Core, Pipeline, Surface, &Uniforms);
+	}
+
+	PaintSurfaceD2dFallback(Core, Surface, Key)?;
+	Surface.Springs.LastRendered = Some(Uniforms);
+	Ok(())
+}
+
+fn PaintSurfaceD2dFallback(
+	Core:&GpuCore,
+	Surface:&mut MonitorSurface,
+	Key:&MonitorVisualKey,
+) -> windows::core::Result<()> {
 	use windows::Win32::Graphics::{
 		Direct2D::{
 			Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT},
@@ -952,10 +1524,14 @@ fn PaintSurface(Core:&GpuCore, Surface:&mut MonitorSurface, Key:&MonitorVisualKe
 	DrawResult?;
 	EndResult?;
 
+	let Resized = Surface.LastKey.is_none();
+
 	unsafe {
 		Surface.SwapChain.Present(0, DXGI_PRESENT(0)).ok()?;
 		Core.DComp.Commit()?;
 	}
+
+	let _ = Resized;
 
 	Surface.LastKey = Some(*Key);
 
@@ -966,7 +1542,43 @@ fn ShouldShowSurface(Key:&MonitorVisualKey) -> bool {
 	(Key.ScreenVisible && Key.RadiusDp > 0) || (Key.Rim.Visible && Key.Rim.RadiusPx > 0)
 }
 
-fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, MonitorSurface>, OverlayClass:&[u16]) {
+fn ShowOrHideSurface(Surface:&mut MonitorSurface, Show:bool) {
+	use windows::Win32::UI::WindowsAndMessaging::{
+		HWND_TOPMOST,
+		SW_HIDE,
+		SW_SHOWNOACTIVATE,
+		SWP_NOACTIVATE,
+		SetWindowPos,
+		ShowWindow,
+	};
+
+	if Show && !Surface.Visible {
+		unsafe {
+			let _ = ShowWindow(Surface.Hwnd, SW_SHOWNOACTIVATE);
+			let _ = SetWindowPos(
+				Surface.Hwnd,
+				Some(HWND_TOPMOST),
+				Surface.PhysicalX,
+				Surface.PhysicalY,
+				Surface.WidthPx,
+				Surface.HeightPx,
+				SWP_NOACTIVATE,
+			);
+		}
+		Surface.Visible = true;
+	} else if !Show && Surface.Visible {
+		unsafe {
+			let _ = ShowWindow(Surface.Hwnd, SW_HIDE);
+		}
+		Surface.Visible = false;
+	}
+}
+
+fn SyncSurfaces(
+	CoreOpt:&mut Option<GpuCore>,
+	Surfaces:&mut HashMap<String, MonitorSurface>,
+	OverlayClass:&[u16],
+) -> bool {
 	use windows::Win32::{
 		Graphics::Dxgi::{
 			Common::DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -974,7 +1586,7 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 			DXGI_ERROR_DEVICE_RESET,
 			DXGI_SWAP_CHAIN_FLAG,
 		},
-		UI::WindowsAndMessaging::{HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SetWindowPos, ShowWindow},
+		UI::WindowsAndMessaging::{HWND_TOPMOST, SW_HIDE, SWP_NOACTIVATE, SetWindowPos, ShowWindow},
 	};
 
 	let Snapshot = {
@@ -998,28 +1610,31 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 				}
 				Surface.Visible = false;
 			}
+			Surface.Springs.Initialized = false;
 		}
-		return;
+		return false;
 	}
 
 	if CoreOpt.is_none() {
 		match GpuCore::New() {
 			Ok(Core) => *CoreOpt = Some(Core),
 			Err(Error) => {
-				eprintln!("radius: Direct2D/DirectComposition init failed: {Error}");
-				return;
+				eprintln!("radius: Direct3D/DirectComposition init failed: {Error}");
+				return false;
 			}
 		}
 	}
 
 	let Some(Core) = CoreOpt.as_ref() else {
-		return;
+		return false;
 	};
 
 	// Destroy orphaned surfaces belonging to disconnected monitors immediately.
 	Surfaces.retain(|Label, _| Monitors.iter().any(|Item| Item.Label == *Label));
 
 	let mut DeviceLost = false;
+
+	let mut AnyAnimating = false;
 
 	for Config in &Monitors {
 		let W = Config.WidthPx.max(1);
@@ -1091,6 +1706,7 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 				Surface.WidthPx = W;
 				Surface.HeightPx = H;
 				Surface.LastKey = None;
+				Surface.Springs.LastRendered = None;
 			}
 		}
 
@@ -1111,22 +1727,26 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 			DarkTheme,
 		};
 
-		let WantVisible = ShouldShowSurface(&Key);
+		let KeyChanged = Surface.LastKey.as_ref() != Some(&Key);
 
-		if !WantVisible {
-			if Surface.Visible {
-				unsafe {
-					let _ = ShowWindow(Surface.Hwnd, SW_HIDE);
-				}
-				Surface.Visible = false;
-			}
+		if KeyChanged || !Surface.Springs.Initialized {
+			Surface.Springs.ApplyKey(&Key, Resized);
+			Surface.LastKey = Some(Key);
+		}
+
+		let Moving = Surface.Springs.Step(1.0 / 240.0);
+
+		AnyAnimating |= Moving;
+
+		let WantShow = ShouldShowSurface(&Key) || Surface.Springs.IsVisibleNow();
+
+		if !WantShow {
+			ShowOrHideSurface(Surface, false);
 			continue;
 		}
 
-		if Surface.LastKey.as_ref() != Some(&Key)
-			&& let Err(Error) = PaintSurface(Core, Surface, &Key)
-		{
-			eprintln!("radius: Direct2D paint failed: {Error}");
+		if let Err(Error) = RenderSurface(Core, Surface, &Key) {
+			eprintln!("radius: GPU paint failed: {Error}");
 			if Error.code() == DXGI_ERROR_DEVICE_REMOVED || Error.code() == DXGI_ERROR_DEVICE_RESET {
 				DeviceLost = true;
 				break;
@@ -1134,27 +1754,14 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 			continue;
 		}
 
-		if !Surface.Visible {
-			unsafe {
-				let _ = ShowWindow(Surface.Hwnd, SW_SHOWNOACTIVATE);
-				let _ = SetWindowPos(
-					Surface.Hwnd,
-					Some(HWND_TOPMOST),
-					Surface.PhysicalX,
-					Surface.PhysicalY,
-					Surface.WidthPx,
-					Surface.HeightPx,
-					SWP_NOACTIVATE,
-				);
-			}
-			Surface.Visible = true;
-		}
+		ShowOrHideSurface(Surface, true);
 	}
 
 	if DeviceLost {
 		Surfaces.clear();
 		*CoreOpt = None;
 		Wake(WM_APP_SYNC);
+		return false;
 	}
 
 	// Publish live HWNDs & physical rects for `Watch` and `Taskbar`.
@@ -1172,9 +1779,66 @@ fn SyncSurfaces(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, Moni
 			),
 		);
 	}
+
+	AnyAnimating
+}
+
+fn TickAnimations(CoreOpt:&mut Option<GpuCore>, Surfaces:&mut HashMap<String, MonitorSurface>, DtSec:f32) -> bool {
+	use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET};
+
+	if Stopping.load(Ordering::Acquire) {
+		return false;
+	}
+
+	let Some(Core) = CoreOpt.as_ref() else {
+		return false;
+	};
+
+	let mut AnyAnimating = false;
+
+	let mut DeviceLost = false;
+
+	for Surface in Surfaces.values_mut() {
+		let Some(Key) = Surface.LastKey else {
+			continue;
+		};
+
+		let Moving = Surface.Springs.Step(DtSec);
+
+		AnyAnimating |= Moving;
+
+		let WantShow = ShouldShowSurface(&Key) || Surface.Springs.IsVisibleNow();
+
+		if !WantShow {
+			ShowOrHideSurface(Surface, false);
+			continue;
+		}
+
+		if let Err(Error) = RenderSurface(Core, Surface, &Key) {
+			eprintln!("radius: GPU frame step failed: {Error}");
+			if Error.code() == DXGI_ERROR_DEVICE_REMOVED || Error.code() == DXGI_ERROR_DEVICE_RESET {
+				DeviceLost = true;
+				break;
+			}
+			continue;
+		}
+
+		ShowOrHideSurface(Surface, true);
+	}
+
+	if DeviceLost {
+		Surfaces.clear();
+		*CoreOpt = None;
+		Wake(WM_APP_SYNC);
+		return false;
+	}
+
+	AnyAnimating
 }
 
 fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
+	use std::time::Instant;
+
 	use windows::{
 		Win32::{
 			Foundation::{HWND, LPARAM, LRESULT, WPARAM},
@@ -1189,6 +1853,8 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 				DispatchMessageW,
 				GetMessageW,
 				MSG,
+				PM_REMOVE,
+				PeekMessageW,
 				RegisterClassExW,
 				TranslateMessage,
 				WNDCLASSEXW,
@@ -1267,39 +1933,175 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 
 	let _ = ReadyTx.send(());
 
+	let TimerHandle = unsafe {
+		let HighRes = windows_sys::Win32::System::Threading::CreateWaitableTimerExW(
+			std::ptr::null(),
+			std::ptr::null(),
+			windows_sys::Win32::System::Threading::CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+			0x001F_0003,
+		);
+
+		if !HighRes.is_null() {
+			HighRes
+		} else {
+			windows_sys::Win32::System::Threading::CreateWaitableTimerExW(
+				std::ptr::null(),
+				std::ptr::null(),
+				0,
+				0x001F_0003,
+			)
+		}
+	};
+
 	let mut CoreOpt:Option<GpuCore> = GpuCore::New().ok();
 
 	let mut Surfaces:HashMap<String, MonitorSurface> = HashMap::new();
 
-	SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
+	let mut Animating = SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
+
+	let mut LastTick = Instant::now();
 
 	let mut Msg = MSG::default();
 
-	unsafe {
-		while GetMessageW(&mut Msg, None, 0, 0).as_bool() {
-			match Msg.message {
-				WM_APP_SYNC => {
-					SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
-				}
-				WM_APP_HIDE_ALL => {
-					for Surface in Surfaces.values_mut() {
-						if Surface.Visible {
-							let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
-								Surface.Hwnd,
-								windows::Win32::UI::WindowsAndMessaging::SW_HIDE,
-							);
-							Surface.Visible = false;
-						}
-					}
-				}
-				WM_APP_SHUTDOWN => {
-					break;
-				}
-				_ => {
-					let _ = TranslateMessage(&Msg);
-					DispatchMessageW(&Msg);
+	let mut ShutdownRequested = false;
+
+	let HandleMsg = |Msg:&MSG,
+	                 CoreOpt:&mut Option<GpuCore>,
+	                 Surfaces:&mut HashMap<String, MonitorSurface>,
+	                 Animating:&mut bool,
+	                 LastTick:&mut Instant,
+	                 ShutdownRequested:&mut bool| {
+		match Msg.message {
+			WM_APP_SYNC => {
+				let WasAnimating = *Animating;
+
+				*Animating = SyncSurfaces(CoreOpt, Surfaces, &OverlayClass);
+
+				if !WasAnimating && *Animating {
+					*LastTick = Instant::now();
 				}
 			}
+			WM_APP_HIDE_ALL => {
+				for Surface in Surfaces.values_mut() {
+					ShowOrHideSurface(Surface, false);
+					Surface.Springs.Initialized = false;
+				}
+				*Animating = false;
+			}
+			WM_APP_SHUTDOWN => {
+				*ShutdownRequested = true;
+			}
+			_ => unsafe {
+				let _ = TranslateMessage(Msg);
+				DispatchMessageW(Msg);
+			},
+		}
+	};
+
+	unsafe {
+		while !ShutdownRequested {
+			if !Animating {
+				if !GetMessageW(&mut Msg, None, 0, 0).as_bool() {
+					break;
+				}
+
+				HandleMsg(
+					&Msg,
+					&mut CoreOpt,
+					&mut Surfaces,
+					&mut Animating,
+					&mut LastTick,
+					&mut ShutdownRequested,
+				);
+
+				while !ShutdownRequested && PeekMessageW(&mut Msg, None, 0, 0, PM_REMOVE).as_bool() {
+					HandleMsg(
+						&Msg,
+						&mut CoreOpt,
+						&mut Surfaces,
+						&mut Animating,
+						&mut LastTick,
+						&mut ShutdownRequested,
+					);
+				}
+
+				continue;
+			}
+
+			if !TimerHandle.is_null() {
+				// 4.1667 ms one-shot pacing = 240 Hz GPU spring refresh (0% CPU when idle).
+				let DueTime:i64 = -41_667;
+
+				let Armed = windows_sys::Win32::System::Threading::SetWaitableTimer(
+					TimerHandle,
+					&DueTime,
+					0,
+					None,
+					std::ptr::null(),
+					0,
+				) != 0;
+
+				if Armed {
+					let Handles = [TimerHandle];
+
+					let _ = windows_sys::Win32::UI::WindowsAndMessaging::MsgWaitForMultipleObjects(
+						1,
+						Handles.as_ptr(),
+						0,
+						16,
+						windows_sys::Win32::UI::WindowsAndMessaging::QS_ALLINPUT,
+					);
+				} else {
+					std::thread::sleep(std::time::Duration::from_millis(4));
+				}
+			} else {
+				std::thread::sleep(std::time::Duration::from_millis(4));
+			}
+
+			let mut HadSync = false;
+
+			while !ShutdownRequested && PeekMessageW(&mut Msg, None, 0, 0, PM_REMOVE).as_bool() {
+				if Msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
+					ShutdownRequested = true;
+					break;
+				}
+
+				if Msg.message == WM_APP_SYNC {
+					HadSync = true;
+					continue;
+				}
+
+				HandleMsg(
+					&Msg,
+					&mut CoreOpt,
+					&mut Surfaces,
+					&mut Animating,
+					&mut LastTick,
+					&mut ShutdownRequested,
+				);
+			}
+
+			if ShutdownRequested {
+				break;
+			}
+
+			let Now = Instant::now();
+
+			let DtSec = (Now - LastTick).as_secs_f32().clamp(0.0005, 0.05);
+
+			LastTick = Now;
+
+			if HadSync {
+				Animating = SyncSurfaces(&mut CoreOpt, &mut Surfaces, &OverlayClass);
+			}
+
+			Animating |= TickAnimations(&mut CoreOpt, &mut Surfaces, DtSec);
+		}
+	}
+
+	if !TimerHandle.is_null() {
+		unsafe {
+			let _ = windows_sys::Win32::Foundation::CloseHandle(TimerHandle);
 		}
 	}
 
@@ -1318,7 +2120,16 @@ fn RunRenderLoop(ReadyTx:std::sync::mpsc::SyncSender<()>) {
 
 #[cfg(test)]
 mod tests {
-	use super::ComputeRimLayout;
+	use super::{
+		ComputeRimLayout,
+		GpuCore,
+		MonitorSprings,
+		MonitorVisualKey,
+		ShaderPipeline,
+		SpringScalar,
+		TaskbarRimState,
+		WorkInsetState,
+	};
 
 	#[test]
 	fn HorizontalRimUsesVerticalGradientAndNonOverlappingStrokes() {
@@ -1359,6 +2170,163 @@ mod tests {
 
 			let InnerOuterEdge = Layout.InnerInset - Layout.InnerW * 0.5;
 			assert!(InnerOuterEdge >= Layout.OuterW - 0.20);
+		}
+	}
+
+	#[test]
+	fn SpringScalarSettlesSmoothlyAt240Hz() {
+		// Critically damped fade spring: zero overshoot past [0, 1].
+		let mut Fade = SpringScalar::New(0.0);
+		Fade.SetTarget(1.0);
+		let mut Frames = 0;
+		while Fade.Step(1.0 / 240.0, 480.0, 43.8, true) && Frames < 240 {
+			assert!(Fade.Value >= 0.0 && Fade.Value <= 1.0);
+			Frames += 1;
+		}
+		assert!(Frames < 120, "fade took too long: {Frames} frames");
+		assert_eq!(Fade.Value, 1.0);
+		assert_eq!(Fade.Velocity, 0.0);
+
+		// Coarse dt = 0.05s sub-stepping also converges cleanly.
+		let mut Radius = SpringScalar::New(0.0);
+		Radius.SetTarget(20.0);
+		let mut Steps = 0;
+		while Radius.Step(0.05, 420.0, 34.0, false) && Steps < 40 {
+			Steps += 1;
+		}
+		assert!(Steps < 20, "coarse spring took too many steps: {Steps}");
+		assert_eq!(Radius.Value, 20.0);
+	}
+
+	#[test]
+	fn HlslLiquidGlassShaderCompilesAndRendersUniformHorizontalRim() {
+		use windows::Win32::Graphics::{
+			Direct3D11::{
+				D3D11_BIND_RENDER_TARGET,
+				D3D11_CPU_ACCESS_READ,
+				D3D11_MAP_READ,
+				D3D11_MAPPED_SUBRESOURCE,
+				D3D11_TEXTURE2D_DESC,
+				D3D11_USAGE_DEFAULT,
+				D3D11_USAGE_STAGING,
+				ID3D11Texture2D,
+			},
+			Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
+		};
+
+		let Core = GpuCore::New().expect("D3D11 device creation");
+		let Pipeline = ShaderPipeline::New(&Core.D3dDevice).expect("LiquidGlass.hlsl compile");
+
+		let W = 128_u32;
+		let H = 64_u32;
+
+		let TexDesc = D3D11_TEXTURE2D_DESC {
+			Width:W,
+			Height:H,
+			MipLevels:1,
+			ArraySize:1,
+			Format:DXGI_FORMAT_B8G8R8A8_UNORM,
+			SampleDesc:DXGI_SAMPLE_DESC { Count:1, Quality:0 },
+			Usage:D3D11_USAGE_DEFAULT,
+			BindFlags:D3D11_BIND_RENDER_TARGET.0 as u32,
+			CPUAccessFlags:0,
+			MiscFlags:0,
+		};
+
+		let mut Tex:Option<ID3D11Texture2D> = None;
+		unsafe {
+			Core.D3dDevice.CreateTexture2D(&TexDesc, None, Some(&mut Tex)).unwrap();
+		}
+		let Tex = Tex.unwrap();
+
+		let mut Rtv = None;
+		unsafe {
+			Core.D3dDevice.CreateRenderTargetView(&Tex, None, Some(&mut Rtv)).unwrap();
+		}
+		let Rtv = Rtv.unwrap();
+
+		let Key = MonitorVisualKey {
+			WidthPx:W as i32,
+			HeightPx:H as i32,
+			ScaleMilli:1500,
+			RadiusDp:0,
+			LightInk:false,
+			ScreenVisible:false,
+			MaximizeCorners:false,
+			Work:WorkInsetState::default(),
+			Rim:TaskbarRimState {
+				Visible:true,
+				Edge:"bottom",
+				LeftPx:0,
+				TopPx:0,
+				WidthPx:W as i32,
+				HeightPx:H as i32,
+				RadiusPx:16,
+				ScaleMilli:1500,
+			},
+			DarkTheme:false,
+		};
+
+		let mut Springs = MonitorSprings::default();
+		Springs.ApplyKey(&Key, true);
+		let Uniforms = Springs.BuildUniforms();
+
+		Pipeline.RenderToRtv(&Core.D3dCtx, &Rtv, W as f32, H as f32, &Uniforms).unwrap();
+
+		let StageDesc = D3D11_TEXTURE2D_DESC {
+			Usage:D3D11_USAGE_STAGING,
+			BindFlags:0,
+			CPUAccessFlags:D3D11_CPU_ACCESS_READ.0 as u32,
+			..TexDesc
+		};
+
+		let mut Stage:Option<ID3D11Texture2D> = None;
+		unsafe {
+			Core.D3dDevice.CreateTexture2D(&StageDesc, None, Some(&mut Stage)).unwrap();
+		}
+		let Stage = Stage.unwrap();
+
+		let Pixel = |X:usize, Y:usize, Ptr:*const u8, Pitch:usize| -> [u8; 4] {
+			unsafe {
+				let Row = Ptr.add(Y * Pitch);
+				let P = Row.add(X * 4);
+				[*P.add(0), *P.add(1), *P.add(2), *P.add(3)]
+			}
+		};
+
+		unsafe {
+			Core.D3dCtx.CopyResource(&Stage, &Tex);
+			let mut Mapped = D3D11_MAPPED_SUBRESOURCE::default();
+			Core.D3dCtx.Map(&Stage, 0, D3D11_MAP_READ, 0, Some(&mut Mapped)).unwrap();
+
+			let Ptr = Mapped.pData as *const u8;
+			let Pitch = Mapped.RowPitch as usize;
+
+			// Outside squircle top-left (0, 0) and taskbar interior (64, 32) must be completely transparent.
+			assert_eq!(
+				Pixel(0, 0, Ptr, Pitch)[3],
+				0,
+				"pixel outside squircle corner must be transparent"
+			);
+			assert_eq!(Pixel(64, 32, Ptr, Pitch)[3], 0, "interior pixel must be transparent");
+
+			// Top rim specular along y=2 must remain horizontally uniform (x=32, 64, 96) and premultiplied.
+			let P32 = Pixel(32, 2, Ptr, Pitch);
+			let P64 = Pixel(64, 2, Ptr, Pitch);
+			let P96 = Pixel(96, 2, Ptr, Pitch);
+			assert!(P32[3] > 20 && P64[3] > 20 && P96[3] > 20, "top specular rim must be visible");
+
+			for P in [P32, P64, P96] {
+				assert!(
+					P[0] <= P[3] && P[1] <= P[3] && P[2] <= P[3],
+					"output must be valid premultiplied BGRA: {P:?}"
+				);
+			}
+
+			let MaxDiff = (P32[1] as i32 - P64[1] as i32).abs().max((P64[1] as i32 - P96[1] as i32).abs());
+			assert!(MaxDiff <= 2, "top rim horizontally non-uniform: {P32:?} {P64:?} {P96:?}");
+
+			Core.D3dCtx.Unmap(&Stage, 0);
 		}
 	}
 }

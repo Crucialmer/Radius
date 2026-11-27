@@ -7,18 +7,17 @@ use crate::{
 	Menu::{Gap, Height, Width},
 };
 
-/// Move the panel under `Anchor`, or above it when there is no room below.
-///
-/// The screen the icon lives on, not the primary one: an icon on a second
-/// display must not drag the panel back to the first. The edges are the screen's
-/// work area rather than its whole rect, because the panel is one level above
-/// the menu bar: clamped to the full rect, a panel with no room under the icon
-/// would be placed over the menu bar and hide the tray icon it was opened from,
-/// which is the one control that has to stay reachable while the panel is open.
-///
-/// Placement is a nicety - a panel in the wrong place is still a panel - so a
-/// failure here never aborts the show.
-pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) {
+/// Computed physical popup target placement and opening direction.
+#[derive(Clone, Copy, Debug)]
+pub struct Placement {
+	pub Left:i32,
+	pub Top:i32,
+	pub Scale:f64,
+	pub OpensAbove:bool,
+}
+
+/// Compute target physical placement under `Anchor`, or above it when there is no room below.
+pub fn Compute<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) -> Placement {
 	// Resolve the monitor containing the tray icon first so cross-DPI setups use
 	// the destination display's scale factor rather than the hidden panel's old one.
 	let FallbackScale = Window.scale_factor().unwrap_or(1.0);
@@ -51,9 +50,26 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) {
 	// bottom of the screen (Windows) would push the panel off it.
 	let Below = Icon.Y + Icon.Height + GapPx;
 
-	let Top = (Below + Panel.Height <= Area.Y + Area.Height)
-		.then_some(Below)
-		.unwrap_or_else(|| (Icon.Y - Panel.Height - GapPx).max(Area.Y));
+	let FitsBelow = Below + Panel.Height <= Area.Y + Area.Height;
 
-	let _ = Window.set_position(Position::Fn(Left, Top));
+	let Top = if FitsBelow { Below } else { (Icon.Y - Panel.Height - GapPx).max(Area.Y) };
+
+	Placement { Left:Left.round() as i32, Top:Top.round() as i32, Scale, OpensAbove:!FitsBelow }
+}
+
+/// Move the panel under `Anchor`, or above it when there is no room below.
+///
+/// The screen the icon lives on, not the primary one: an icon on a second
+/// display must not drag the panel back to the first. The edges are the screen's
+/// work area rather than its whole rect, because the panel is one level above
+/// the menu bar: clamped to the full rect, a panel with no room under the icon
+/// would be placed over the menu bar and hide the tray icon it was opened from,
+/// which is the one control that has to stay reachable while the panel is open.
+///
+/// Placement is a nicety - a panel in the wrong place is still a panel - so a
+/// failure here never aborts the show.
+pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) {
+	let Target = Compute(App, Window, Anchor);
+
+	let _ = Window.set_position(Position::Fn(f64::from(Target.Left), f64::from(Target.Top)));
 }

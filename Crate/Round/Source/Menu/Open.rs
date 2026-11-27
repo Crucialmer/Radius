@@ -1,14 +1,15 @@
 //! Open the scrims, then the panel above them.
 
-use tauri::{AppHandle, Rect, Runtime, WebviewWindow};
+use tauri::{AppHandle, Emitter, Rect, Runtime, WebviewWindow};
 
 use crate::{
 	Backdrop::{Close as BackdropClose, Open as BackdropOpen},
-	Menu::Place,
+	Bounds::Position,
+	Menu::{Animate, Place},
 	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform},
 };
 
-/// Show the panel over a fresh set of scrims.
+/// Show the panel over a fresh set of scrims with a 240Hz GPU entrance spring.
 ///
 /// A scrim that cannot be built is not a reason to refuse the panel - the tray
 /// still closes it - so the failure is logged and the panel shows. A panel that
@@ -16,7 +17,15 @@ use crate::{
 /// is a window eating clicks with nothing over it, which is the one state worse
 /// than a panel that will not close.
 pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) -> tauri::Result<()> {
-	Place::Fn(App, Window, Anchor);
+	Animate::Cancel();
+
+	let Target = Place::Compute(App, Window, Anchor);
+
+	let Offset = (12.0 * Target.Scale).round() as i32;
+
+	let StartY = if Target.OpensAbove { Target.Top + Offset } else { Target.Top - Offset };
+
+	let _ = Window.set_position(Position::Fn(f64::from(Target.Left), f64::from(StartY)));
 
 	let _ = BackdropOpen::Fn(App).inspect_err(|Error| eprintln!("radius: the backdrop could not be opened: {Error}"));
 
@@ -26,6 +35,13 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) -
 	// later: a level on macOS, a re-insert at the top of the topmost band on
 	// Windows, a raise on X11. See [`Overlay`](crate::Overlay).
 	Platform::Panel(Window);
+
+	let _ = Window.emit("panel-open", Target.OpensAbove);
+
+	#[cfg(target_os = "windows")]
+	if let Ok(Native) = Window.hwnd() {
+		Animate::SpringOpen(Native.0 as isize, Target.Left, StartY, Target.Top);
+	}
 
 	// `show` already orders the window front and makes it key; this is what asks
 	// the app to activate. If macOS refuses - it refuses an activation that did

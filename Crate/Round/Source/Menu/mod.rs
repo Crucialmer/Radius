@@ -1,3 +1,4 @@
+pub mod Animate;
 pub mod Build;
 pub mod Command;
 pub mod Gap;
