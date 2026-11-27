@@ -462,7 +462,7 @@ export default () => {
 											</span>
 										</label>
 									</div>
-									<p class="Note">独立于屏幕圆角；开启后以 Apple G2 连续曲率裁切并叠加 D3D11 液态玻璃着色彩边</p>
+									<p class="Note">独立于屏幕圆角；开启后以 Apple G2 连续曲率裁切并叠加均匀抗锯齿细边</p>
 								</div>
 
 								<Row

@@ -675,11 +675,7 @@ impl MonitorSprings {
 
 		let RimSpan = (RimR * 1.528_665).min(RimW * 0.5).min(RimH * 0.5).max(0.0);
 
-		let Layout = ComputeRimLayout(self.RimLeftPx.Value, self.RimTopPx.Value, RimW, RimH, RimSpan, self.Scale);
-
-		let InnerStart = (Layout.InnerInset - Layout.InnerW * 0.5).max(0.0);
-
-		let InnerEnd = Layout.InnerInset + Layout.InnerW * 0.5;
+		let Layout = ComputeRimLayout(RimSpan, self.Scale);
 
 		ShaderUniforms {
 			Screen:[W, H, self.Scale, ScreenSpan],
@@ -692,8 +688,8 @@ impl MonitorSprings {
 			CornerMask:self.DrawMask,
 			MaxWork:[self.MaxOpacity.Value.clamp(0.0, 1.0), WorkLeftX, WorkRightX, WorkBottomY],
 			RimRect:[self.RimLeftPx.Value, self.RimTopPx.Value, RimW, RimH],
-			RimParams:[RimSpan, self.RimOpacity.Value.clamp(0.0, 1.0), Layout.OuterW, Layout.InnerW],
-			RimDetail:[InnerStart, InnerEnd, if self.RimIsHorizontal { 1.0 } else { 0.0 }, 0.0],
+			RimParams:[RimSpan, self.RimOpacity.Value.clamp(0.0, 1.0), Layout.OuterW, 0.0],
+			RimDetail:[0.0, 0.0, if self.RimIsHorizontal { 1.0 } else { 0.0 }, 0.0],
 			Extra:[0.0; 4],
 		}
 	}
@@ -1215,62 +1211,26 @@ struct RimLayout {
 	OuterW:f32,
 	OuterInset:f32,
 	OuterR:f32,
-	InnerW:f32,
-	InnerInset:f32,
-	InnerR:f32,
-	GradStartX:f32,
-	GradStartY:f32,
-	GradEndX:f32,
-	GradEndY:f32,
 }
 
-/// Compute non-overlapping concentric stroke geometry and thickness-axis specular
-/// gradient endpoints for `DrawTaskbarRim`.
-fn ComputeRimLayout(Left:f32, Top:f32, W:f32, H:f32, Radius:f32, Scale:f32) -> RimLayout {
+/// Compute uniform matte outer hairline geometry for taskbar edge antialiasing.
+fn ComputeRimLayout(Radius:f32, Scale:f32) -> RimLayout {
 	let OuterW = (1.0 * Scale).clamp(1.0, 2.0);
 
 	let OuterInset = OuterW * 0.5;
 
 	let OuterR = (Radius - OuterInset).max(0.0);
 
-	let InnerW = (0.9 * Scale).clamp(0.85, 1.75);
-
-	// Position the specular stroke so its outer edge just kisses `OuterW - 0.15`,
-	// avoiding both an unstroked gap and dark-over-white overlap along the edge.
-	let InnerInset = OuterW + InnerW * 0.5 - 0.15;
-
-	let InnerR = (Radius - InnerInset).max(0.0);
-
-	// Span strictly along the taskbar's narrow axis so brightness never decays
-	// horizontally across wide multi-thousand-pixel horizontal taskbars.
-	let (GradEndX, GradEndY) = if W >= H { (Left, Top + H) } else { (Left + W, Top) };
-
-	RimLayout {
-		OuterW,
-		OuterInset,
-		OuterR,
-		InnerW,
-		InnerInset,
-		InnerR,
-		GradStartX:Left,
-		GradStartY:Top,
-		GradEndX,
-		GradEndY,
-	}
+	RimLayout { OuterW, OuterInset, OuterR }
 }
 
-/// Draw a concentric hardware-anti-aliased macOS 26 Liquid Glass rim aligned 1:1
-/// in physical pixels over the clipped Windows taskbar boundary.
+/// Draw a single matte hardware-anti-aliased border aligned 1:1 in physical
+/// pixels over the clipped Windows taskbar boundary (fallback when HLSL is unavailable).
 fn DrawTaskbarRim(Core:&GpuCore, Rim:&TaskbarRimState, DarkTheme:bool) -> windows::core::Result<()> {
 	use windows::Win32::Graphics::Direct2D::{
-		Common::{D2D_RECT_F, D2D1_COLOR_F, D2D1_GRADIENT_STOP},
-		D2D1_EXTEND_MODE_CLAMP,
-		D2D1_GAMMA_2_2,
-		D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+		Common::{D2D_RECT_F, D2D1_COLOR_F},
 		D2D1_ROUNDED_RECT,
-		ID2D1RenderTarget,
 	};
-	use windows_numerics::Vector2;
 
 	if !Rim.Visible || Rim.RadiusPx <= 0 || Rim.WidthPx <= 2 || Rim.HeightPx <= 2 {
 		return Ok(());
@@ -1288,13 +1248,12 @@ fn DrawTaskbarRim(Core:&GpuCore, Rim:&TaskbarRimState, DarkTheme:bool) -> window
 
 	let Radius = (Rim.RadiusPx as f32).min(W * 0.5).min(H * 0.5);
 
-	let Layout = ComputeRimLayout(Left, Top, W, H, Radius, Scale);
+	let Layout = ComputeRimLayout(Radius, Scale);
 
-	// Layer 1: Exact flush concentric outer contact border covering the GDI clip seam.
 	let OuterColor = if DarkTheme {
-		D2D1_COLOR_F { r:0.0, g:0.0, b:0.0, a:0.36 }
+		D2D1_COLOR_F { r:0.0, g:0.0, b:0.0, a:0.28 }
 	} else {
-		D2D1_COLOR_F { r:15.0 / 255.0, g:18.0 / 255.0, b:26.0 / 255.0, a:0.20 }
+		D2D1_COLOR_F { r:15.0 / 255.0, g:18.0 / 255.0, b:26.0 / 255.0, a:0.14 }
 	};
 
 	let OuterBrush = unsafe { Core.D2dCtx.CreateSolidColorBrush(&OuterColor, None)? };
@@ -1312,48 +1271,6 @@ fn DrawTaskbarRim(Core:&GpuCore, Rim:&TaskbarRimState, DarkTheme:bool) -> window
 
 	unsafe {
 		Core.D2dCtx.DrawRoundedRectangle(&OuterRect, &OuterBrush, Layout.OuterW, None);
-	}
-
-	// Layer 2: Concentric uniform-span macOS 26 Liquid Glass specular refraction rim.
-	if W > Layout.InnerInset * 2.0 + 1.0 && H > Layout.InnerInset * 2.0 + 1.0 {
-		let (TopA, MidA, BotA) = if DarkTheme { (0.24, 0.08, 0.14) } else { (0.44, 0.18, 0.28) };
-
-		let Stops = [
-			D2D1_GRADIENT_STOP { position:0.0, color:D2D1_COLOR_F { r:1.0, g:1.0, b:1.0, a:TopA } },
-			D2D1_GRADIENT_STOP { position:0.50, color:D2D1_COLOR_F { r:1.0, g:1.0, b:1.0, a:MidA } },
-			D2D1_GRADIENT_STOP { position:1.0, color:D2D1_COLOR_F { r:1.0, g:1.0, b:1.0, a:BotA } },
-		];
-
-		let Collection = unsafe {
-			ID2D1RenderTarget::CreateGradientStopCollection(
-				&Core.D2dCtx,
-				&Stops,
-				D2D1_GAMMA_2_2,
-				D2D1_EXTEND_MODE_CLAMP,
-			)?
-		};
-
-		let GradProps = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-			startPoint:Vector2 { X:Layout.GradStartX, Y:Layout.GradStartY },
-			endPoint:Vector2 { X:Layout.GradEndX, Y:Layout.GradEndY },
-		};
-
-		let SpecBrush = unsafe { Core.D2dCtx.CreateLinearGradientBrush(&GradProps, None, &Collection)? };
-
-		let InnerRect = D2D1_ROUNDED_RECT {
-			rect:D2D_RECT_F {
-				left:Left + Layout.InnerInset,
-				top:Top + Layout.InnerInset,
-				right:Left + W - Layout.InnerInset,
-				bottom:Top + H - Layout.InnerInset,
-			},
-			radiusX:Layout.InnerR,
-			radiusY:Layout.InnerR,
-		};
-
-		unsafe {
-			Core.D2dCtx.DrawRoundedRectangle(&InnerRect, &SpecBrush, Layout.InnerW, None);
-		}
 	}
 
 	Ok(())
@@ -2132,44 +2049,13 @@ mod tests {
 	};
 
 	#[test]
-	fn HorizontalRimUsesVerticalGradientAndNonOverlappingStrokes() {
+	fn RimLayoutScalesMatteHairlineCleanly() {
 		for Scale in [1.0_f32, 1.365, 1.5, 2.0] {
-			let Layout = ComputeRimLayout(0.0, 2096.0, 3840.0, 64.0, 15.0, Scale);
+			let Layout = ComputeRimLayout(15.0, Scale);
 
-			assert_eq!(Layout.GradStartX, 0.0);
-			assert_eq!(Layout.GradStartY, 2096.0);
-			assert_eq!(
-				Layout.GradEndX, 0.0,
-				"horizontal gradient must not drift with width at scale {Scale}"
-			);
-			assert_eq!(Layout.GradEndY, 2160.0);
-
-			let InnerOuterEdge = Layout.InnerInset - Layout.InnerW * 0.5;
-			assert!(
-				InnerOuterEdge >= Layout.OuterW - 0.20,
-				"inner stroke overlaps outer border too deeply at scale {Scale}: inner_outer={InnerOuterEdge}, \
-				 outer_w={}",
-				Layout.OuterW
-			);
-			assert!(Layout.InnerR < Layout.OuterR && Layout.OuterR < 15.0);
-		}
-	}
-
-	#[test]
-	fn VerticalRimUsesHorizontalGradientAndNonOverlappingStrokes() {
-		for Scale in [1.0_f32, 1.365, 1.5, 2.0] {
-			let Layout = ComputeRimLayout(0.0, 0.0, 64.0, 2160.0, 15.0, Scale);
-
-			assert_eq!(Layout.GradStartX, 0.0);
-			assert_eq!(Layout.GradStartY, 0.0);
-			assert_eq!(
-				Layout.GradEndX, 64.0,
-				"vertical taskbar gradient must span width at scale {Scale}"
-			);
-			assert_eq!(Layout.GradEndY, 0.0);
-
-			let InnerOuterEdge = Layout.InnerInset - Layout.InnerW * 0.5;
-			assert!(InnerOuterEdge >= Layout.OuterW - 0.20);
+			assert!((Layout.OuterW - (1.0 * Scale).clamp(1.0, 2.0)).abs() < 1e-4);
+			assert!((Layout.OuterInset - Layout.OuterW * 0.5).abs() < 1e-4);
+			assert!(Layout.OuterR > 0.0 && Layout.OuterR < 15.0);
 		}
 	}
 
@@ -2302,29 +2188,43 @@ mod tests {
 			let Ptr = Mapped.pData as *const u8;
 			let Pitch = Mapped.RowPitch as usize;
 
-			// Outside squircle top-left (0, 0) and taskbar interior (64, 32) must be completely transparent.
+			// Outside squircle top-left (0, 0), inner strip (64, 5), and interior center (64, 32)
+			// must be completely transparent (zero inward glow).
 			assert_eq!(
 				Pixel(0, 0, Ptr, Pitch)[3],
 				0,
 				"pixel outside squircle corner must be transparent"
 			);
+			assert_eq!(Pixel(64, 5, Ptr, Pitch)[3], 0, "inward strip must have zero glow");
 			assert_eq!(Pixel(64, 32, Ptr, Pitch)[3], 0, "interior pixel must be transparent");
 
-			// Top rim specular along y=2 must remain horizontally uniform (x=32, 64, 96) and premultiplied.
-			let P32 = Pixel(32, 2, Ptr, Pitch);
-			let P64 = Pixel(64, 2, Ptr, Pitch);
-			let P96 = Pixel(96, 2, Ptr, Pitch);
-			assert!(P32[3] > 20 && P64[3] > 20 && P96[3] > 20, "top specular rim must be visible");
+			// Top (x=32, 64, 96, y=0), bottom (64, 63), left (0, 32), right (127, 32) must all share
+			// identical uniform matte color/alpha with zero directional glow or RGB dispersion.
+			let Samples = [
+				Pixel(32, 0, Ptr, Pitch),
+				Pixel(64, 0, Ptr, Pitch),
+				Pixel(96, 0, Ptr, Pitch),
+				Pixel(64, 63, Ptr, Pitch),
+				Pixel(0, 32, Ptr, Pitch),
+				Pixel(127, 32, Ptr, Pitch),
+			];
 
-			for P in [P32, P64, P96] {
+			for P in Samples {
+				assert!(P[3] > 10, "edge hairline must be visible: {P:?}");
 				assert!(
 					P[0] <= P[3] && P[1] <= P[3] && P[2] <= P[3],
 					"output must be valid premultiplied BGRA: {P:?}"
 				);
+				let MaxDiff = (P[0] as i32 - Samples[0][0] as i32)
+					.abs()
+					.max((P[1] as i32 - Samples[0][1] as i32).abs())
+					.max((P[2] as i32 - Samples[0][2] as i32).abs())
+					.max((P[3] as i32 - Samples[0][3] as i32).abs());
+				assert!(
+					MaxDiff <= 2,
+					"edge color/alpha must stay uniform across all 4 sides: {Samples:?}"
+				);
 			}
-
-			let MaxDiff = (P32[1] as i32 - P64[1] as i32).abs().max((P64[1] as i32 - P96[1] as i32).abs());
-			assert!(MaxDiff <= 2, "top rim horizontally non-uniform: {P32:?} {P64:?} {P96:?}");
 
 			Core.D3dCtx.Unmap(&Stage, 0);
 		}

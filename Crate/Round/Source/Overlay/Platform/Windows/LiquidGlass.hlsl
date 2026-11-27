@@ -95,17 +95,10 @@ float4 SquircleBoxSDF(float2 p, float2 center, float2 halfExt, float span) {
 	return float4(edgeDist, 0.0, nrm);
 }
 
-// Interleaved Gradient Noise micro-dither to prevent 8-bit quantization banding on subtle glass gradients.
+// Interleaved Gradient Noise micro-dither to prevent 8-bit quantization banding.
 float IgNoise(float2 pos) {
 	float3 magic = float3(0.06711056, 0.00583715, 52.9829189);
 	return frac(magic.z * frac(dot(pos, magic.xy))) - 0.5;
-}
-
-float RimSpecularWeight(float depth, float startD, float endD) {
-	float halfW = max((endD - startD) * 0.5, 0.35);
-	float mid = (startD + endD) * 0.5;
-	float distFromCenter = abs(depth - mid);
-	return 1.0 - smoothstep(max(halfW - 0.55, 0.0), halfW + 0.55, distFromCenter);
 }
 
 float4 CompositeOver(float4 dstPremul, float3 srcRgb, float srcAlpha) {
@@ -158,7 +151,7 @@ float4 PSMain(float4 svPos : SV_Position) : SV_Target {
 	float cutoutAlpha = max(cornerCoverage * ScreenOp, maxCoverage * MaxOp);
 	float4 outCol = float4(InkColor * cutoutAlpha, cutoutAlpha);
 
-	// 2. Taskbar 4-Corner Apple G2 Squircle Liquid Glass Optical Rim
+	// 2. Taskbar 4-Corner Apple G2 Squircle uniform anti-aliased hairline (no glow / dispersion)
 	float RimOp = saturate(RimParams.y);
 	float RimSpan = RimParams.x;
 	if (RimOp > 0.001 && RimSpan > 0.5 && RimRect.z > 2.0 && RimRect.w > 2.0) {
@@ -174,68 +167,16 @@ float4 PSMain(float4 svPos : SV_Position) : SV_Target {
 			float4 sdf = SquircleBoxSDF(p, center, halfExt, RimSpan);
 
 			float sd = sdf.x;
-			float curv = sdf.y;
-			float2 nrm = sdf.zw;
 			float depth = -sd; // positive inside taskbar, 0 right on boundary
 
 			float OuterW = RimParams.z;
-			float InnerStart = RimDetail.x;
-			float InnerEnd = RimDetail.y;
-			bool IsHoriz = RimDetail.z > 0.5;
 
-			// Layer A: Outer contact hairline flush along the ExtCreateRegion squircle clip boundary
-			float outerCov = smoothstep(-0.55, 0.55, depth) * (1.0 - smoothstep(OuterW - 0.45, OuterW + 0.55, depth));
-			float outerAlpha = outerCov * lerp(0.22, 0.38, ThemeMix) * RimOp;
+			// Uniform matte hairline covering the ExtCreateRegion squircle clip seam evenly on all 4 sides
+			float outerCov = smoothstep(-0.5, 0.5, depth) * (1.0 - smoothstep(OuterW - 0.5, OuterW + 0.5, depth));
+			float outerAlpha = outerCov * lerp(0.14, 0.28, ThemeMix) * RimOp;
 			float3 outerRgb = lerp(float3(15.0 / 255.0, 18.0 / 255.0, 26.0 / 255.0), float3(0.0, 0.0, 0.0), ThemeMix);
 			if (outerAlpha > 0.001) {
 				outCol = CompositeOver(outCol, outerRgb, outerAlpha);
-			}
-
-			// Layer B: Specular Liquid Glass refraction rim with strict thickness-axis lighting
-			// and subtle optical chromatic dispersion strongest on the 4 curved G2 corners.
-			float disp = 0.35 * Scale * (0.25 + 0.75 * curv);
-			float wR = RimSpecularWeight(depth - disp, InnerStart, InnerEnd);
-			float wG = RimSpecularWeight(depth, InnerStart, InnerEnd);
-			float wB = RimSpecularWeight(depth + disp, InnerStart, InnerEnd);
-			float wAvg = (wR + wG + wB) * (1.0 / 3.0);
-
-			if (wAvg > 0.001) {
-				float topDot = IsHoriz ? saturate(-nrm.y) : saturate(-nrm.x);
-				float botDot = IsHoriz ? saturate(nrm.y) : saturate(nrm.x);
-				float sideDot = IsHoriz ? pow(abs(nrm.x), 1.35) : pow(abs(nrm.y), 1.35);
-
-				float lightTop = 0.46;
-				float lightSide = 0.28;
-				float lightBot = 0.26;
-
-				float darkTop = 0.28;
-				float darkSide = 0.16;
-				float darkBot = 0.14;
-
-				float iLight = topDot * lightTop + sideDot * lightSide + botDot * lightBot + 0.14 * curv;
-				float iDark = topDot * darkTop + sideDot * darkSide + botDot * darkBot + 0.10 * curv;
-				float intensity = lerp(iLight, iDark, ThemeMix);
-
-				// Subtle RGB glass dispersion tint (38% chroma blend around white specular)
-				float3 prism = lerp(float3(wAvg, wAvg, wAvg), float3(wR, wG, wB), 0.38);
-				float specAlpha = saturate(max(prism.r, max(prism.g, prism.b)) * intensity) * RimOp;
-				float3 specColor = saturate(prism / max(max(prism.r, max(prism.g, prism.b)), 1e-4));
-
-				if (specAlpha > 0.001) {
-					outCol = CompositeOver(outCol, specColor, specAlpha);
-				}
-			}
-
-			// Layer C: Soft inward glass depth bevel over ~3.5 * Scale physical pixels
-			float innerDepth = max(depth - OuterW, 0.0);
-			if (depth > OuterW - 0.5 && innerDepth < 4.0 * Scale) {
-				float bevelFalloff = exp(-innerDepth / (1.8 * Scale)) * smoothstep(OuterW - 0.5, OuterW + 0.5, depth);
-				float topSide = IsHoriz ? saturate(-nrm.y * 0.5 + 0.5) : saturate(-nrm.x * 0.5 + 0.5);
-				float bevelBase = lerp(lerp(0.025, 0.065, topSide), lerp(0.015, 0.04, topSide), ThemeMix);
-				float bevelAlpha = bevelFalloff * (bevelBase + 0.025 * curv) * RimOp;
-				if (bevelAlpha > 0.001) {
-					outCol = CompositeOver(outCol, float3(1.0, 1.0, 1.0), bevelAlpha);
-				}
 			}
 		}
 	}
