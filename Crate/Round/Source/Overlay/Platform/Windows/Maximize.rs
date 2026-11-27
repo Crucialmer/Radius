@@ -3,13 +3,9 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Runtime};
 
-use crate::{
-	Message::{Enum::Enum as Message, Payload::Struct as Payload},
-	Overlay::Platform::Taskbar,
-	Screen::Struct::Struct as Screen,
-};
+use crate::{Overlay::Platform::Taskbar, Screen::Struct::Struct as Screen};
 
 /// Per-monitor detection summary shared with [`Taskbar::Apply`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,33 +338,15 @@ pub fn Refresh<R:Runtime>(
 
 		let Previous = Map.get(&Item.Label).copied();
 
-		if Previous.is_none_or(|Prev| {
-			Prev.Left != NextState.Left
-				|| Prev.Right != NextState.Right
-				|| Prev.Bottom != NextState.Bottom
-				|| Prev.OverlayW != NextState.OverlayW
-				|| Prev.OverlayH != NextState.OverlayH
-		}) {
-			let _ = App.emit_to(
-				Item.Label.as_str(),
-				"work_inset",
-				Payload {
-					Message:Message::WorkInset {
-						LeftPx:RelLeft,
-						RightPx:RelRight,
-						BottomPx:RelBottom,
-						OverlayW,
-						OverlayH,
-					},
+		if Previous != Some(NextState) {
+			crate::Overlay::Platform::Engine::UpdateWorkInset(
+				&Item.Label,
+				crate::Overlay::Platform::Engine::WorkInsetState {
+					Maximized:NextState.Maximized,
+					LeftPx:NextState.Left,
+					RightPx:NextState.Right,
+					BottomPx:NextState.Bottom,
 				},
-			);
-		}
-
-		if Previous.is_none_or(|Prev| Prev.Maximized != NextState.Maximized) {
-			let _ = App.emit_to(
-				Item.Label.as_str(),
-				"maximized",
-				Payload { Message:Message::Maximized(NextState.Maximized) },
 			);
 		}
 

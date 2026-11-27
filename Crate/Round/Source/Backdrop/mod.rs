@@ -1,6 +1,8 @@
 pub mod Build;
 pub mod Close;
 pub mod Label;
+#[cfg(target_os = "windows")]
+pub mod Native;
 pub mod Open;
 pub mod Owns;
 pub mod Prefix;

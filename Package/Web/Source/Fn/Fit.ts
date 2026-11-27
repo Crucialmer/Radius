@@ -4,14 +4,14 @@ import type { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Locate from "./Locate.js";
 
 /** The width the panel is drawn at, in logical pixels - matches `Menu::Width`. */
-const Width = 368;
+const Width = 340;
 
-/** Transparent shadow margin on every side so the macOS 26 Liquid Glass ambient
- *  elevation shadow fades smoothly with zero window-edge clipping. */
-const Margin = 16;
+/** Native Windows 11 DWM Acrylic owns the outer rounded corners & elevation shadow,
+ *  so the panel fills the full client surface with zero dead border margin. */
+const Margin = 0;
 
-/** Logical pixels of work area kept clear of the panel: anchor gap + vertical margins. */
-const Reserve = 6 + 2 * Margin;
+/** Logical pixels of work area kept clear of the panel above/below the tray anchor. */
+const Reserve = 14;
 
 /** Size the window to the panel and clamp both X and Y cleanly inside the
  *  monitor's exact physical work area across 1080p–8K and mixed-DPI setups. */

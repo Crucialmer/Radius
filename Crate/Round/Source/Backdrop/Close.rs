@@ -1,15 +1,18 @@
 //! Hiding every scrim.
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
-use crate::Backdrop::Owns;
+/// Hide every scrim immediately.
+#[cfg(target_os = "windows")]
+pub fn Fn<R:Runtime>(_App:&AppHandle<R>) { crate::Backdrop::Native::Close(); }
 
 /// Hide every scrim.
-///
-/// Idempotent: a window that is already hidden is left hidden, so closing twice
-/// costs nothing and cannot fail - the scrim's second click, or a `dismiss` that
-/// arrives after the tray already closed the panel.
+#[cfg(not(target_os = "windows"))]
 pub fn Fn<R:Runtime>(App:&AppHandle<R>) {
+	use tauri::Manager;
+
+	use crate::Backdrop::Owns;
+
 	App.webview_windows()
 		.into_values()
 		.filter(|Window| Owns::Fn(Window.label()))

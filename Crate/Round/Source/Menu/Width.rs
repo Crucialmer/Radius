@@ -1,2 +1,2 @@
-/// The panel's width in logical pixels (336 content + 2 * 16 shadow margin).
-pub const Const:f64 = 368.0;
+/// The panel's width in logical pixels (flush native Windows 11 DWM Acrylic surface).
+pub const Const:f64 = 340.0;

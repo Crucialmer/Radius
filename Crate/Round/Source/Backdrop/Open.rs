@@ -1,15 +1,22 @@
 //! Showing one scrim over every monitor.
 
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
+#[cfg(not(target_os = "windows"))]
+use tauri::Manager;
 
+#[cfg(not(target_os = "windows"))]
 use crate::Backdrop::{Label, Owns, Show};
+
+/// Show one scrim over every monitor's work area.
+///
+/// On Windows this uses ultra-lightweight native Win32 layered windows (zero
+/// WebView2 processes) for instant <1ms opening and freeze-free dismissal.
+#[cfg(target_os = "windows")]
+pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> tauri::Result<()> { crate::Backdrop::Native::Open(App) }
 
 /// Show one scrim over every monitor's work area, building the ones that do not
 /// exist yet.
-///
-/// A monitor whose scrim cannot be built is logged and skipped rather than
-/// aborting the open: a panel with a scrim on two of three displays is still a
-/// panel, and the tray icon still closes it.
+#[cfg(not(target_os = "windows"))]
 pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> tauri::Result<()> {
 	let Monitors = App.available_monitors()?;
 
@@ -18,9 +25,6 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> tauri::Result<()> {
 			.inspect_err(|Error| eprintln!("radius: the backdrop over monitor {Index} could not be shown: {Error}"));
 	});
 
-	// A display that went away takes its scrim with it. A stale one would sit
-	// over a screen that no longer exists and eat clicks with no panel above it,
-	// which is the one state worse than a panel that will not close.
 	let Live:Vec<String> = (0..Monitors.len()).map(Label::Fn).collect();
 
 	App.webview_windows()

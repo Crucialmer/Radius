@@ -29,6 +29,12 @@ use crate::{
 /// window alone. Visibility never had this problem because it does not travel as
 /// an event at all: [`Apply`] acts on the window object itself.
 pub fn Fn<R:Runtime>(State:&Struct, App:&AppHandle<R>) {
+	#[cfg(target_os = "windows")]
+	if let Some(Held) = App.try_state::<crate::Screen::Registry::Struct>() {
+		let Screens = Held.Snapshot();
+		crate::Overlay::Platform::Engine::SyncSettings(State, &Screens);
+	}
+
 	App.webview_windows()
 		.into_values()
 		.filter(|Window| Window.label() != MenuLabel::Const && !Owns::Fn(Window.label()))

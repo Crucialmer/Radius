@@ -259,13 +259,14 @@ fn RunUpdate<R:Runtime>(
 
 	fs::write(&ScriptPath, ScriptBody.as_bytes()).map_err(|Error| format!("无法生成安装脚本: {Error}"))?;
 
-	// 1. Stop the background WinEvent watcher immediately so it cannot fight
-	//    window teardown or re-clip `Shell_TrayWnd` while we are exiting.
+	// 1. Stop the background WinEvent watcher and hide native GPU overlays
+	//    immediately so nothing fights window teardown or `Taskbar::Restore()`.
 	crate::Overlay::Platform::Watch::Stop();
+	crate::Overlay::Platform::Engine::HideAll();
+	crate::Backdrop::Close::Fn(App);
 
-	// 2. Hide all topmost click-eating scrims, panel, and overlays on the main
-	//    thread (with a bounded wait so shutdown can never deadlock), restore
-	//    the taskbar region, and delete the tray icon cleanly.
+	// 2. Hide the panel on the main thread (with a bounded wait so shutdown can
+	//    never deadlock), restore the taskbar region, and delete the tray icon.
 	let (DoneTx, DoneRx) = std::sync::mpsc::sync_channel::<()>(1);
 
 	let MainApp = App.clone();
@@ -284,6 +285,8 @@ fn RunUpdate<R:Runtime>(
 	});
 
 	let _ = DoneRx.recv_timeout(std::time::Duration::from_millis(800));
+
+	crate::Overlay::Platform::Engine::Stop();
 
 	let CmdPath = System32Tool("cmd.exe");
 

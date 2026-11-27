@@ -16,15 +16,8 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
 	let Builder = Chrome::Fn(
 		WebviewWindowBuilder::new(App, Label::Const, WebviewUrl::App("menu.html".into())),
 		"Radius",
-	);
-
-	// On Windows 11, `.shadow(true)` on a transparent borderless window paints a
-	// rectangular DWM shadow outside the panel's rounded Liquid Glass shell.
-	#[cfg(target_os = "windows")]
-	let Builder = Builder.shadow(false);
-
-	#[cfg(not(target_os = "windows"))]
-	let Builder = Builder.shadow(true);
+	)
+	.shadow(true);
 
 	let Window = Builder.build()?;
 

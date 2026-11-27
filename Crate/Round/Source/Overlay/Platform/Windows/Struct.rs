@@ -130,22 +130,49 @@ impl Trait for Struct {
 		}
 	}
 
-	/// Above every scrim.
-	///
-	/// A window created after another one enters the topmost band above it, so
-	/// the scrim would otherwise sit over the panel. `HWND_TOPMOST` with no size
-	/// or move is a re-insert at the top of the band, which is the whole of the
-	/// ordering here - and it is applied after the scrims are up, so the panel is
-	/// on top however many times the panel has been opened.
+	/// Above every scrim, backed by authentic Windows 11 native DWM Transient
+	/// Acrylic real-time backdrop blur (`DWMSBT_TRANSIENTWINDOW`) with native
+	/// rounded corners (`DWMWCP_ROUND`) and live dark/light theme synchronization.
 	fn Panel<R:Runtime>(Window:&WebviewWindow<R>) {
-		let _ = Window.set_shadow(false);
-
 		let Some(Native) = handle(Window) else {
 			return;
 		};
 
 		unsafe {
-			let Corner:i32 = DWMWCP_DONOTROUND;
+			use windows_sys::Win32::{
+				Graphics::Dwm::{
+					DWMSBT_TRANSIENTWINDOW,
+					DWMWA_SYSTEMBACKDROP_TYPE,
+					DWMWA_USE_IMMERSIVE_DARK_MODE,
+					DWMWCP_ROUND,
+					DwmExtendFrameIntoClientArea,
+				},
+				UI::Controls::MARGINS,
+			};
+
+			let DarkMode:i32 = i32::from(crate::Overlay::Platform::Engine::ReadAppsDarkTheme());
+
+			let _ = DwmSetWindowAttribute(
+				Native,
+				DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+				&DarkMode as *const i32 as *const core::ffi::c_void,
+				std::mem::size_of::<i32>() as u32,
+			);
+
+			let FullSheet = MARGINS { cxLeftWidth:-1, cxRightWidth:-1, cyTopHeight:-1, cyBottomHeight:-1 };
+
+			let _ = DwmExtendFrameIntoClientArea(Native, &FullSheet);
+
+			let Backdrop:i32 = DWMSBT_TRANSIENTWINDOW;
+
+			let AcrylicOk = DwmSetWindowAttribute(
+				Native,
+				DWMWA_SYSTEMBACKDROP_TYPE as u32,
+				&Backdrop as *const i32 as *const core::ffi::c_void,
+				std::mem::size_of::<i32>() as u32,
+			) == 0;
+
+			let Corner:i32 = if AcrylicOk { DWMWCP_ROUND } else { DWMWCP_DONOTROUND };
 
 			let _ = DwmSetWindowAttribute(
 				Native,

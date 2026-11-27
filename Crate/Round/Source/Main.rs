@@ -5,7 +5,7 @@
 //! The `round` binary: one overlay webview per monitor, then the tray icon.
 
 use pround::{
-	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform, Sync as OverlaySync},
+	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform},
 	Screen::{All as ScreenAll, Registry},
 	Settings::{Load as SettingsLoad, Save as SettingsSave, Store::Fn as StorePath},
 	Tray::{Install, Remove as TrayRemove},
@@ -114,9 +114,13 @@ fn main() {
 			// before any window exists.
 			Platform::Dock(Preferences.Dock);
 
-			Screens
-				.iter()
-				.try_for_each(|Screen| OverlaySync::BuildOverlay(App.handle(), &Preferences, Screen).map(|_| ()))?;
+			// Start the native Direct3D 11 + Direct2D + DirectComposition GPU overlay
+			// engine (zero WebView2 processes for screen corners & taskbar rims).
+			#[cfg(target_os = "windows")]
+			{
+				pround::Overlay::Platform::Engine::Start();
+				pround::Overlay::Platform::Engine::SyncSettings(&Preferences, &Screens);
+			}
 
 			Install::Fn(App.handle())?;
 
@@ -138,6 +142,8 @@ fn main() {
 			tauri::RunEvent::Exit => {
 				pround::Overlay::Platform::Watch::Stop();
 				pround::Backdrop::Close::Fn(App);
+				#[cfg(target_os = "windows")]
+				pround::Overlay::Platform::Engine::Stop();
 				pround::Overlay::Platform::Taskbar::Restore();
 				TrayRemove::Fn(App);
 			}

@@ -1,6 +1,6 @@
 {
 	"name": "@application/radius",
-	"version": "1.2.3",
+	"version": "2.0.0",
 	"private": true,
 	"description": "Radius Windows 便携版屏幕圆角与任务栏美化工具。",
 	"homepage": "https://github.com/Crucialmer/Radius#readme",

@@ -10,12 +10,18 @@ pub fn Quit<R:Runtime>(App:AppHandle<R>) {
 	crate::Overlay::Platform::Watch::Stop();
 	crate::Backdrop::Close::Fn(&App);
 
+	#[cfg(target_os = "windows")]
+	crate::Overlay::Platform::Engine::HideAll();
+
 	for Window in App.webview_windows().into_values() {
 		let _ = Window.hide();
 	}
 
 	crate::Overlay::Platform::Taskbar::Restore();
 	crate::Tray::Remove::Fn(&App);
+
+	#[cfg(target_os = "windows")]
+	crate::Overlay::Platform::Engine::Stop();
 
 	std::thread::spawn(|| {
 		std::thread::sleep(std::time::Duration::from_millis(1500));

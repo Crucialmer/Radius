@@ -16,7 +16,6 @@ use std::{
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-	Backdrop::Owns,
 	Menu::Label as MenuLabel,
 	Overlay::{
 		Layer::Trait::Trait as _,
@@ -256,13 +255,12 @@ fn DisplaySignature() -> Vec<DisplayTuple> {
 }
 
 #[cfg(target_os = "windows")]
-fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Screen::Struct::Struct]) {
+fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, _Screens:&[crate::Screen::Struct::Struct]) {
 	use windows_sys::Win32::{
-		Foundation::{HWND, RECT},
+		Foundation::HWND,
 		UI::WindowsAndMessaging::{
 			GW_HWNDPREV,
 			GetWindow,
-			GetWindowRect,
 			HWND_TOPMOST,
 			IsWindow,
 			IsWindowVisible,
@@ -275,27 +273,14 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 
 	let Taskbars = Taskbar::FindVisible();
 
-	let Windows = App.webview_windows();
+	if Taskbars.is_empty() {
+		return;
+	}
 
 	let mut Reordered = false;
 
-	for Window in Windows.values() {
-		let Label = Window.label();
-
-		if Label == MenuLabel::Const || Owns::Fn(Label) {
-			continue;
-		}
-
-		// Skip orphaned windows whose monitor has already been removed.
-		let Some(Screen) = Screens.iter().find(|Item| Item.Label == Label) else {
-			continue;
-		};
-
-		let Ok(Raw) = Window.hwnd() else {
-			continue;
-		};
-
-		let OverlayHwnd = Raw.0 as HWND;
+	for (_, Raw) in crate::Overlay::Platform::Engine::AllHwnds() {
+		let OverlayHwnd = Raw as HWND;
 
 		if OverlayHwnd.is_null() {
 			continue;
@@ -303,34 +288,6 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 
 		unsafe {
 			if IsWindow(OverlayHwnd) == 0 || IsWindowVisible(OverlayHwnd) == 0 {
-				continue;
-			}
-
-			// Self-heal if a cross-DPI `WM_DPICHANGED` transition silently shifted or
-			// resized this overlay away from its monitor's exact physical bounds.
-			let mut WinRect = RECT { left:0, top:0, right:0, bottom:0 };
-
-			if GetWindowRect(OverlayHwnd, &mut WinRect) != 0 {
-				let CurW = WinRect.right - WinRect.left;
-
-				let CurH = WinRect.bottom - WinRect.top;
-
-				if WinRect.left != Screen.PhysicalX
-					|| WinRect.top != Screen.PhysicalY
-					|| CurW != Screen.Pixels.0
-					|| CurH != Screen.Pixels.1
-				{
-					let SnapApp = App.clone();
-
-					let SnapLabel = Label.to_owned();
-
-					let _ = App.run_on_main_thread(move || {
-						OverlaySync::Snap(&SnapApp, &SnapLabel);
-					});
-				}
-			}
-
-			if Taskbars.is_empty() {
 				continue;
 			}
 
@@ -356,22 +313,13 @@ fn EnsureOverlaysAboveTaskbar<R:Runtime>(App:&AppHandle<R>, Screens:&[crate::Scr
 	}
 
 	if Reordered
-		&& let Some(Menu) = Windows.get(MenuLabel::Const)
+		&& let Some(Menu) = App.get_webview_window(MenuLabel::Const)
 		&& let Ok(Raw) = Menu.hwnd()
 		&& !Raw.0.is_null()
 		&& unsafe { IsWindow(Raw.0 as HWND) != 0 && IsWindowVisible(Raw.0 as HWND) != 0 }
 	{
-		for Window in Windows.values() {
-			if Owns::Fn(Window.label())
-				&& let Ok(ScrimRaw) = Window.hwnd()
-				&& !ScrimRaw.0.is_null()
-				&& unsafe { IsWindow(ScrimRaw.0 as HWND) != 0 && IsWindowVisible(ScrimRaw.0 as HWND) != 0 }
-			{
-				Platform::Scrim(Window);
-			}
-		}
-
-		Platform::Panel(Menu);
+		crate::Backdrop::Native::RaiseVisible();
+		Platform::Panel(&Menu);
 	}
 }
 
@@ -419,6 +367,7 @@ fn RunMessageLoop() {
 					ScheduleReconcile();
 				}
 				WM_SETTINGCHANGE => {
+					crate::Overlay::Platform::Engine::RefreshTheme();
 					NeedsMaximize.store(true, Ordering::Release);
 					NeedsTaskbar.store(true, Ordering::Release);
 					BurstTicks.store(4, Ordering::Release);

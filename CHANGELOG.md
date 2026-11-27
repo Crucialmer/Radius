@@ -4,6 +4,21 @@
 
 ---
 
+## 2.0.0
+
+### 架构级重塑：全面升级至原生 Direct3D 11 + Direct2D + DirectComposition GPU 渲染引擎与 Win11 原生 DWM Acrylic 毛玻璃
+
+- **屏幕四角 / 最大化底部圆角 / 任务栏玻璃描边全面迁移至 Rust 原生 GPU 引擎（零 WebView2 覆盖层）**：
+  - 新增 `Overlay::Platform::Engine`：使用 Direct3D 11 + Direct2D（`D2D1_ANTIALIAS_MODE_PER_PRIMITIVE`）+ DirectComposition（`IDXGISwapChain1` + `DXGI_ALPHA_MODE_PREMULTIPLIED` + `WS_EX_NOREDIRECTIONBITMAP`）直接以 **1:1 物理像素（`SetDpi(96, 96)`）** 绘制所有屏幕圆角与任务栏玻璃描边。
+  - 彻底移除每个显示器常驻的 WebView2 覆盖层进程：常驻内存直降 80%+，彻底根除 Chromium 分数 DPI（如 `131 DPI / 136%`、`110%`、`175%`）视口舍入偏移与多 WebView2 退出卡顿。
+  - 原生硬件抗锯齿绘制 Apple G2 连续曲率 Squircle 屏幕圆角与最大化底部圆角，以及严格同心的 macOS 26 Liquid Glass 任务栏外暗影 + 对角线镜面高光折射描边（实时跟随 Windows 系统明暗主题切换）；支持 WARP 自动回退与 `DXGI_ERROR_DEVICE_REMOVED` 设备丢失无感自愈。
+- **空白点击拦截层（`Backdrop`）迁移至超轻量原生 Win32 透明窗口（零 WebView2）**：
+  - 移除每块显示器的 WebView2 透明遮罩进程，改为原生 `WS_EX_LAYERED` 极轻量 Win32 窗口，面板开启与点击收起毫秒级响应，零内存残留、零卸载阻塞。
+- **控制面板升级为 Windows 11 原生 DWM Acrylic 实时毛玻璃材质**：
+  - 启用 Windows 11 原生 `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW` 实时背景亚克力模糊、`DWMWCP_ROUND` 系统原生圆角阴影与 `DWMWA_USE_IMMERSIVE_DARK_MODE` 明暗模式同步，配合高通透 Liquid Glass 前端着色层与对角线折射描边，真正实时透出并模糊下方壁纸与窗口内容（不支持 Acrylic 的旧系统自动平滑降级）。
+
+---
+
 ## 1.2.3
 
 ### 修复（彻底解决应用内自动更新时电脑卡顿/卡住的问题）

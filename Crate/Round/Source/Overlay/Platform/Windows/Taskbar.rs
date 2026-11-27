@@ -5,10 +5,9 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::{
-	Message::{Enum::Enum as Message, Payload::Struct as Payload},
 	Overlay::Platform::Maximize::MonitorReport,
 	Radius::Struct::Struct as Radius,
 	Screen::Struct::Struct as Screen,
@@ -123,50 +122,17 @@ pub fn InvalidateAll() {
 	}
 }
 
-/// Return the actual physical Win32 client-viewport rectangle of one monitor's
-/// overlay window in screen coordinates (falling back to `GetWindowRect` and
-/// then `Fallback`) so CSS `(0%, 0%)` aligns 1:1 with physical pixels even if
-/// Windows attaches any non-client frame offset.
+/// Return the actual physical Win32 rectangle of one monitor's native GPU
+/// overlay window in screen coordinates (falling back to `Fallback` if not yet
+/// created).
 #[cfg(target_os = "windows")]
 pub fn OverlayRect<R:Runtime>(
-	App:&AppHandle<R>,
+	_App:&AppHandle<R>,
 	Label:&str,
 	Fallback:windows_sys::Win32::Foundation::RECT,
 ) -> windows_sys::Win32::Foundation::RECT {
-	use windows_sys::Win32::{
-		Foundation::{HWND, POINT, RECT},
-		Graphics::Gdi::ClientToScreen,
-		UI::WindowsAndMessaging::{GetClientRect, GetWindowRect, IsWindow},
-	};
-
-	if let Some(Window) = App.get_webview_window(Label)
-		&& let Ok(Raw) = Window.hwnd()
-	{
-		let Hwnd = Raw.0 as HWND;
-
-		if !Hwnd.is_null() && unsafe { IsWindow(Hwnd) } != 0 {
-			let mut Client = RECT { left:0, top:0, right:0, bottom:0 };
-
-			let mut Origin = POINT { x:0, y:0 };
-
-			if unsafe { GetClientRect(Hwnd, &mut Client) != 0 && ClientToScreen(Hwnd, &mut Origin) != 0 }
-				&& Client.right > Client.left
-				&& Client.bottom > Client.top
-			{
-				return RECT {
-					left:Origin.x,
-					top:Origin.y,
-					right:Origin.x + (Client.right - Client.left),
-					bottom:Origin.y + (Client.bottom - Client.top),
-				};
-			}
-
-			let mut Rect = RECT { left:0, top:0, right:0, bottom:0 };
-
-			if unsafe { GetWindowRect(Hwnd, &mut Rect) } != 0 && Rect.right > Rect.left && Rect.bottom > Rect.top {
-				return Rect;
-			}
-		}
+	if let Some(Rect) = crate::Overlay::Platform::Engine::OverlayRect(Label) {
+		return Rect;
 	}
 
 	Fallback
@@ -761,7 +727,7 @@ pub fn Apply<R:Runtime>(
 }
 
 #[cfg(target_os = "windows")]
-fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<String, FrameKey>) {
+fn SyncFrames<R:Runtime>(_App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<String, FrameKey>) {
 	let mut Guard = FrameCache.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner());
 
 	let Map = Guard.get_or_insert_with(HashMap::new);
@@ -786,24 +752,17 @@ fn SyncFrames<R:Runtime>(App:&AppHandle<R>, Screens:&[Screen], Next:&HashMap<Str
 			continue;
 		}
 
-		let Scale = (f64::from(Target.ScaleMilli) / 1000.0).max(1.0);
-
-		let _ = App.emit_to(
-			Item.Label.as_str(),
-			"taskbar_frame",
-			Payload {
-				Message:Message::TaskbarFrame {
-					Visible:Target.Visible,
-					Edge:Target.Edge,
-					LeftPx:Target.Left,
-					TopPx:Target.Top,
-					WidthPx:Target.Width,
-					HeightPx:Target.Height,
-					OverlayW:Target.OverlayW,
-					OverlayH:Target.OverlayH,
-					RadiusPx:Target.Radius,
-					Scale,
-				},
+		crate::Overlay::Platform::Engine::UpdateTaskbarRim(
+			&Item.Label,
+			crate::Overlay::Platform::Engine::TaskbarRimState {
+				Visible:Target.Visible,
+				Edge:Target.Edge,
+				LeftPx:Target.Left,
+				TopPx:Target.Top,
+				WidthPx:Target.Width,
+				HeightPx:Target.Height,
+				RadiusPx:Target.Radius,
+				ScaleMilli:Target.ScaleMilli,
 			},
 		);
 
