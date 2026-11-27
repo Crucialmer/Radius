@@ -134,9 +134,9 @@ pub fn Compute<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Re
 pub fn Fit<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, LogicalW:f64, LogicalH:f64) {
 	Animate::Cancel();
 
-	let CleanW = LogicalW.max(1.0);
+	let CleanW = LogicalW.max(Width::Const);
 
-	let CleanH = LogicalH.max(1.0);
+	let CleanH = LogicalH.max(120.0);
 
 	*LastLogicalSize.lock().unwrap_or_else(|Poisoned| Poisoned.into_inner()) = Some((CleanW, CleanH));
 

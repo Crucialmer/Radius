@@ -5,7 +5,7 @@ import { createEffect, createSignal, Index, onCleanup, onMount, Show } from "sol
 
 import Context from "../Context.js";
 import Describe from "../Fn/Describe.js";
-import Fit from "../Fn/Fit.js";
+import Fit, { MeasurePanelHeight } from "../Fn/Fit.js";
 import Name from "../Fn/Name.js";
 import { RunSpring } from "../Fn/Spring.js";
 import type { State, UpdateInfo } from "../Type/Panel.js";
@@ -60,7 +60,7 @@ export default () => {
 
 		if (!Measured) return;
 
-		const NextHeight = Math.ceil(Measured.getBoundingClientRect().height);
+		const NextHeight = MeasurePanelHeight(Measured);
 
 		if (NextHeight === LastHeight || NextHeight <= 2) return;
 
@@ -94,30 +94,35 @@ export default () => {
 			const root = Element;
 			if (!root) return;
 
+			const resetRoot = () => {
+				root.style.opacity = "";
+				root.style.transform = "";
+				root.style.transformOrigin = "";
+				root.style.willChange = "";
+			};
+
 			root.style.willChange = "transform, opacity";
 			root.style.transformOrigin = opensAbove ? "50% 100%" : "50% 0%";
 
-			CancelOpenSprings.push(
-				RunSpring({
-					from: 0,
-					to: 1,
-					stiffness: 540,
-					damping: 35,
-					precision: 0.001,
-					onUpdate: (t) => {
-						const op = Math.min(1, Math.max(0.2, 0.2 + 0.8 * t));
-						const sc = 0.975 + 0.025 * t;
-						root.style.opacity = `${op}`;
-						root.style.transform = `scale3d(${sc}, ${sc}, 1)`;
-					},
-					onComplete: () => {
-						root.style.opacity = "";
-						root.style.transform = "";
-						root.style.transformOrigin = "";
-						root.style.willChange = "";
-					},
-				}),
-			);
+			const stopRoot = RunSpring({
+				from: 0,
+				to: 1,
+				stiffness: 540,
+				damping: 35,
+				precision: 0.001,
+				onUpdate: (t) => {
+					const op = Math.min(1, Math.max(0.2, 0.2 + 0.8 * t));
+					const sc = 0.975 + 0.025 * t;
+					root.style.opacity = `${op}`;
+					root.style.transform = `scale3d(${sc}, ${sc}, 1)`;
+				},
+				onComplete: resetRoot,
+			});
+
+			CancelOpenSprings.push(() => {
+				stopRoot();
+				resetRoot();
+			});
 
 			const groups = root.querySelectorAll<HTMLElement>(".Group");
 			const dir = opensAbove ? 6 : -6;
@@ -159,6 +164,11 @@ export default () => {
 
 			const toX = input.checked ? 16 : 0;
 			const fromX = input.checked ? 0 : 16;
+			const resetThumb = () => {
+				thumb.style.transform = "";
+				thumb.style.willChange = "";
+			};
+
 			thumb.style.willChange = "transform";
 			const stop = RunSpring({
 				from: fromX,
@@ -170,12 +180,12 @@ export default () => {
 					const stretch = Math.min(0.24, Math.abs(v) * 0.0008);
 					thumb.style.transform = `translate3d(${x.toFixed(2)}px, 0, 0) scale3d(${(1 + stretch).toFixed(3)}, ${(1 - stretch * 0.35).toFixed(3)}, 1)`;
 				},
-				onComplete: () => {
-					thumb.style.transform = "";
-					thumb.style.willChange = "";
-				},
+				onComplete: resetThumb,
 			});
-			CancelOpenSprings.push(stop);
+			CancelOpenSprings.push(() => {
+				stop();
+				resetThumb();
+			});
 		};
 
 		const Observer = new ResizeObserver(ScheduleFit);

@@ -14,15 +14,25 @@ const Margin = 0;
 /** Logical pixels of work area kept clear of the panel above/below the tray anchor. */
 const Reserve = 14;
 
+/** Measure intrinsic layout height independent of CSS transforms (`scale3d`),
+ *  preventing compound shrinkage across repeated spring openings. */
+export const MeasurePanelHeight = (Element:HTMLDivElement, MaxHeight = Number.POSITIVE_INFINITY):number => {
+	const Raw = Math.ceil(Math.max(Element.scrollHeight, Element.offsetHeight)) + 2;
+
+	return Number.isFinite(MaxHeight) ? Math.min(Raw, Math.floor(MaxHeight)) : Raw;
+};
+
 /** Size the window to the panel and clamp both X and Y cleanly inside the
  *  monitor's exact physical work area across 1080p–8K and mixed-DPI setups. */
 export default async (Element:HTMLDivElement, Window:ReturnType<typeof getCurrentWebviewWindow>) => {
 	const Area = await Locate();
 
-	// Cap before measurement so scroll height stays strictly within the screen's work area.
-	Element.style.maxHeight = Area ? `${Math.max(Area.Height - Reserve, 2 * Margin)}px` : "";
+	const MaxHeight = Area ? Math.max(Area.Height - Reserve, 120) : Number.POSITIVE_INFINITY;
 
-	const Height = Math.ceil(Element.getBoundingClientRect().height) + 2 * Margin;
+	// Cap before measurement so scroll height stays strictly within the screen's work area.
+	Element.style.maxHeight = Number.isFinite(MaxHeight) ? `${MaxHeight}px` : "";
+
+	const Height = MeasurePanelHeight(Element, MaxHeight) + 2 * Margin;
 
 	if (Height <= 2) return;
 
