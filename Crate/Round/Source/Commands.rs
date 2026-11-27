@@ -27,6 +27,7 @@ macro_rules! Commands {
 			$crate::Menu::Command::Ready::Ready,
 			$crate::Menu::Command::Reset::Reset,
 			$crate::Menu::Command::Dismiss::Dismiss,
+			$crate::Menu::Command::Fit::FitPanel,
 			$crate::Menu::Command::Quit::Quit,
 		]
 	};

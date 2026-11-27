@@ -3,6 +3,7 @@
 pub mod Autostart;
 pub mod Dismiss;
 pub mod Dock;
+pub mod Fit;
 pub mod Hidden;
 pub mod Maximize;
 pub mod Mode;

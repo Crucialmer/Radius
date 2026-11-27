@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import type { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -22,6 +23,15 @@ export default async (Element:HTMLDivElement, Window:ReturnType<typeof getCurren
 	Element.style.maxHeight = Area ? `${Math.max(Area.Height - Reserve, 2 * Margin)}px` : "";
 
 	const Height = Math.ceil(Element.getBoundingClientRect().height) + 2 * Margin;
+
+	if (Height <= 2) return;
+
+	try {
+		await invoke("fit_panel", { width: Width, height: Height });
+		return;
+	} catch (error) {
+		console.warn("radius: atomic fit_panel failed, falling back", error);
+	}
 
 	await Window.setSize(new LogicalSize(Width, Height)).catch((error) =>
 		console.warn("radius: the panel could not be resized", error),

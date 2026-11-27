@@ -4,7 +4,6 @@ use tauri::{AppHandle, Emitter, Rect, Runtime, WebviewWindow};
 
 use crate::{
 	Backdrop::{Close as BackdropClose, Open as BackdropOpen},
-	Bounds::Position,
 	Menu::{Animate, Place},
 	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform},
 };
@@ -21,11 +20,11 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>, Window:&WebviewWindow<R>, Anchor:Rect) -
 
 	let Target = Place::Compute(App, Window, Anchor);
 
-	let Offset = (12.0 * Target.Scale).round() as i32;
+	let Offset = (8.0 * Target.Scale).round() as i32;
 
 	let StartY = if Target.OpensAbove { Target.Top + Offset } else { Target.Top - Offset };
 
-	let _ = Window.set_position(Position::Fn(f64::from(Target.Left), f64::from(StartY)));
+	Place::ApplyBounds(Window, Target.Left, StartY, Target.WidthPx, Target.HeightPx);
 
 	let _ = BackdropOpen::Fn(App).inspect_err(|Error| eprintln!("radius: the backdrop could not be opened: {Error}"));
 

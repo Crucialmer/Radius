@@ -51,11 +51,34 @@ export default () => {
 		if (Picker) Picker.value = value;
 	});
 
+	let LastHeight = -1;
+
+	const ScheduleFit = () => {
+		if (!State()) return;
+
+		const Measured = Element;
+
+		if (!Measured) return;
+
+		const NextHeight = Math.ceil(Measured.getBoundingClientRect().height);
+
+		if (NextHeight === LastHeight || NextHeight <= 2) return;
+
+		LastHeight = NextHeight;
+
+		requestAnimationFrame(() => {
+			if (Element && State()) void Fit(Element, Window);
+		});
+	};
+
+	createEffect(() => {
+		if (State()) ScheduleFit();
+	});
+
 	onMount(() => {
 		void call("state");
 
 		let Disposed = false;
-		let LastHeight = -1;
 		let UnlistenUpdate:(() => void) | undefined;
 		let UnlistenOpen:(() => void) | undefined;
 		let CancelOpenSprings:(() => void)[] = [];
@@ -153,22 +176,6 @@ export default () => {
 				},
 			});
 			CancelOpenSprings.push(stop);
-		};
-
-		const ScheduleFit = () => {
-			const Measured = Element;
-
-			if (!Measured) return;
-
-			const NextHeight = Math.ceil(Measured.getBoundingClientRect().height);
-
-			if (NextHeight === LastHeight) return;
-
-			LastHeight = NextHeight;
-
-			requestAnimationFrame(() => {
-				if (!Disposed && Element) void Fit(Element, Window);
-			});
 		};
 
 		const Observer = new ResizeObserver(ScheduleFit);

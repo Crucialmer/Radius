@@ -3,7 +3,7 @@
 use tauri::{AppHandle, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::{
-	Menu::Label,
+	Menu::{Height, Label, Width},
 	Overlay::{Layer::Trait::Trait as _, Platform::Struct::Struct as Platform},
 	Window::Chrome,
 };
@@ -17,6 +17,7 @@ pub fn Fn<R:Runtime>(App:&AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
 		WebviewWindowBuilder::new(App, Label::Const, WebviewUrl::App("menu.html".into())),
 		"Radius",
 	)
+	.inner_size(Width::Const, Height::Const)
 	.shadow(true);
 
 	let Window = Builder.build()?;
